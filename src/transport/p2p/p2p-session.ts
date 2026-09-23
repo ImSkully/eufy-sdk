@@ -221,6 +221,13 @@ interface RetainedDatagram {
 const CMD_SET_PAYLOAD = 1350;
 /** CMD_NOTIFY_PAYLOAD (1351) — the station's unsolicited JSON notification. */
 const CMD_NOTIFY_PAYLOAD = 1351;
+/**
+ * The one reply body read for a result code besides the bare four-byte int32: a `CMD_SET_PAYLOAD` answer of
+ * exactly this many bytes, carrying the int32 LE code followed by nothing but zero padding. The length is
+ * not 16-byte aligned, so the level-1 decrypt never opens such a body, and no level-1 plaintext — always a
+ * whole number of blocks — can have it.
+ */
+const PADDED_RESULT_BYTES = 132;
 /** CMD_CAMERA_INFO — a camera reporting its OWN params, as a root-level array. */
 const CMD_CAMERA_INFO = 1103;
 const CMD_DATABASE_IMAGE = 1308;
@@ -1836,13 +1843,17 @@ export class P2PSession extends EventEmitter {
     // does, and a direct-binary switch is the write with the least other confirmation to fall back
     // on. An allowlist of wrappers would keep those silent.
     //
-    // The body must be exactly four bytes, not merely long enough: on the wire a control reply is a
+    // A bare result is exactly four bytes, not merely long enough: on the wire a control reply is a
     // 36-byte sign-8 frame carrying four bytes of plaintext, measured across two captures. A frame
     // the decrypt above could not open stays ciphertext — the level-1 path needs 16-byte alignment
     // and the level-2 path can decline — and ciphertext is neither JSON nor four bytes, so a length
     // test alone would read its first word and report a fabricated code for a command whose answer
     // was never recovered. Media is excluded because its bodies are never control plaintext.
-    if (!isMedia && !frame.json && data.length === 4) {
+    const paddedResult =
+      header.commandId === CMD_SET_PAYLOAD &&
+      data.length === PADDED_RESULT_BYTES &&
+      data.subarray(4).every((b) => b === 0);
+    if (!isMedia && !frame.json && (data.length === 4 || paddedResult)) {
       this.emit("commandResult", { code: data.readInt32LE(0), channel: header.channel });
     }
     this.emit("data", frame);
