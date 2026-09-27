@@ -98,6 +98,8 @@ export type {
   DeviceState,
   RealtimePlaneReadiness,
   RealtimeReadiness,
+  StationFace,
+  StationFacesOptions,
   WaitForRealtimeOptions,
 } from "./types.js";
 
@@ -1907,7 +1909,7 @@ export class EufyMega extends EventEmitter {
    *
    * The cloud roster (`api.getFaces()`) answers empty for an account that keeps its faces on the
    * station, because they were never uploaded — the station holds them. `person_basic_info` is where
-   * they live, and {@link P2PSession.requestFaces} is the query the app itself issues for them.
+   * they live, and `P2PSession.requestFaces` is the query the app itself issues for them.
    *
    * Resolves with the rows the station returned, or an empty list when it returns none. Rejects on a
    * station that cannot be reached, and on {@link StationFacesOptions.timeoutMs} elapsing before a
