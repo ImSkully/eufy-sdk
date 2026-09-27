@@ -5,6 +5,9 @@ import { LIVE_TRACE_MESSAGE } from "../live-trace.js";
 import { ResponseMessageType, frameMessage } from "../codec.js";
 
 /**
+ * A measured wired-camera run had an 18 s idle interval, twenty unacknowledged retransmits on resume,
+ * and an immediately streaming rebuilt session.
+ *
  * PONG, PING, ACK and DATA on the selected peer path refresh liveness. Three silent heartbeat periods signal a
  * stale path once peer traffic has arrived; a path with no post-connect peer traffic remains unknown.
  */
