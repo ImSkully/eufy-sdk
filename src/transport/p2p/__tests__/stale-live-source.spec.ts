@@ -8,11 +8,14 @@ const CAMERA = "T8000P0000000001";
 
 /** A connected session that can reveal which connection received a media start. */
 function session() {
-  return Object.assign(connectedSession(true), {
+  const fake = connectedSession(true);
+  return Object.assign(fake, {
     pathAnswering: true,
     startLiveMedia: vi.fn(),
     stopLiveMedia: vi.fn(),
-    close: vi.fn().mockResolvedValue(undefined),
+    close: vi.fn(async () => {
+      fake.emit("close");
+    }),
   });
 }
 
