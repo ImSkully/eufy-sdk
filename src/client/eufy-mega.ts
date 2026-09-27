@@ -85,6 +85,8 @@ import type {
   DeviceState,
   RealtimePlaneReadiness,
   RealtimeReadiness,
+  StationFace,
+  StationFacesOptions,
   WaitForRealtimeOptions,
 } from "./types.js";
 
@@ -113,6 +115,38 @@ function recordString(raw: Record<string, unknown>, key: string): string | undef
   const nested = (raw.deviceParams as Record<string, unknown> | undefined)?.[key];
   const v = typeof nested === "string" && nested ? nested : raw[key];
   return typeof v === "string" && v ? v : undefined;
+}
+
+/** How long a station's database reply has to arrive whole, when the caller states no bound. */
+const DB_TABLE_TIMEOUT_MS = 15_000;
+
+/** The owning member's `admin_user_id` off a raw device record, which its station scopes writes to. */
+function adminUserIdFrom(raw: unknown): string | undefined {
+  const member = ((raw ?? {}) as Record<string, unknown>).member as Record<string, unknown> | undefined;
+  const id = member?.admin_user_id;
+  return typeof id === "string" && id ? id : undefined;
+}
+
+/**
+ * The rows of a `CMD_DATABASE` reply, once the accumulated fragments form one whole JSON document.
+ *
+ * `undefined` while they do not. The frames carry no index, no total and no terminator, so the
+ * document's own structure is the only completion signal in the stream — a parse that succeeds had
+ * every byte, and a truncated accumulation cannot parse as a complete one.
+ *
+ * The station wraps the table as `{cmd, count, data:[…]}`; a reply shaped otherwise answers its own
+ * array, or none, rather than being reshaped into one.
+ */
+function dbRowsOf(text: string): unknown[] | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (Array.isArray(parsed)) return parsed;
+  const data = (parsed as { data?: unknown } | null)?.data;
+  return Array.isArray(data) ? data : [];
 }
 
 /**
@@ -363,12 +397,7 @@ export class EufyMega extends EventEmitter {
       onError: (e) => this.reportError(e),
       // The `a2` account id an `eufy_life` DP frame embeds — the owning member's `admin_user_id`,
       // falling back to the logged-in account's user id (the confirmed script path does the same).
-      resolveAccountId: (dev) => {
-        const member = ((dev.raw ?? {}) as Record<string, unknown>).member as Record<string, unknown> | undefined;
-        const adminId = member?.admin_user_id;
-        if (typeof adminId === "string" && adminId) return adminId;
-        return this.mega.auth?.userId ?? "";
-      },
+      resolveAccountId: (dev) => adminUserIdFrom(dev.raw) ?? this.mega.auth?.userId ?? "",
       // Fetch + parse a gallery effect from the HTTP catalogue into the serializable spec. The catalogue
       // lives in the http layer (transport/http/light-catalog); the mqtt router owns the frame bytes.
       resolvePreset: (presetId) => resolveLightEffectHttp(this.mega, presetId),
@@ -1871,6 +1900,92 @@ export class EufyMega extends EventEmitter {
    */
   getP2pSessions(): Map<string, P2PSession> {
     return this.p2p.getSessions();
+  }
+
+  /**
+   * The people enrolled on a station, read from its own database over P2P.
+   *
+   * The cloud roster (`api.getFaces()`) answers empty for an account that keeps its faces on the
+   * station, because they were never uploaded — the station holds them. `person_basic_info` is where
+   * they live, and {@link P2PSession.requestFaces} is the query the app itself issues for them.
+   *
+   * Resolves with the rows the station returned, or an empty list when it returns none. Rejects on a
+   * station that cannot be reached, and on {@link StationFacesOptions.timeoutMs} elapsing before a
+   * complete reply arrives.
+   *
+   * Completion is the parse. The station streams the table as `CMD_DATABASE` frames whose decrypted
+   * text is a fragment of one JSON document, so the fragments are concatenated and parsed after each
+   * one: the first parse that succeeds is the whole document, and a truncated accumulation cannot
+   * masquerade as a complete one. A reply that never parses times out rather than answering with a
+   * partial table — this answers the station's rows or nothing, never a guess at them.
+   *
+   * `stranger<n>` names are the station's own auto-assigned placeholders for a face nobody has named,
+   * and are returned as they arrive; a caller that wants only named people filters them.
+   */
+  async getStationFaces(stationSn: string, opts: StationFacesOptions = {}): Promise<StationFace[]> {
+    if (!this.registry.list().length) await this.getDevices();
+    const station = this.p2p.stationKeyOf(stationSn);
+    const accountId = this.adminUserIdOf(station);
+    if (!accountId) throw new Error(`getStationFaces: no admin_user_id on record for ${station}`);
+
+    await this.p2p.ensureStation(station, opts.signal);
+    const session = this.p2p.getSessions().get(station);
+    if (!session) throw new Error(`getStationFaces: no P2P session for ${station}`);
+
+    const rows = await this.collectDbTable(session, station, opts, () => session.requestFaces({ accountId }));
+    return rows.filter((row): row is StationFace => typeof row === "object" && row !== null);
+  }
+
+  /**
+   * Accumulate one `CMD_DATABASE` reply and answer its rows.
+   *
+   * The chunks carry no index, no total and no terminator, so there is nothing to count down; what
+   * they do carry is one JSON document split across them. Parsing the accumulation after every chunk
+   * uses the document's own structure as the completion signal, which is the only evidence in the
+   * stream that the reply is whole.
+   */
+  private collectDbTable(
+    session: P2PSession,
+    stationSn: string,
+    opts: StationFacesOptions,
+    request: () => void,
+  ): Promise<unknown[]> {
+    return new Promise<unknown[]>((resolve, reject) => {
+      let text = "";
+      const onChunk = (chunk: { stationSn: string; text: string }): void => {
+        if (chunk.stationSn !== stationSn) return;
+        text += chunk.text;
+        const rows = dbRowsOf(text);
+        if (rows) settle(() => resolve(rows));
+      };
+      const timer = setTimeout(
+        () => settle(() => reject(new Error(`getStationFaces: ${stationSn} sent no complete reply`))),
+        opts.timeoutMs ?? DB_TABLE_TIMEOUT_MS,
+      );
+      const onAbort = (): void => settle(() => reject(new Error("getStationFaces: aborted")));
+      const settle = (finish: () => void): void => {
+        clearTimeout(timer);
+        session.off("dbChunk", onChunk);
+        opts.signal?.removeEventListener("abort", onAbort);
+        finish();
+      };
+
+      session.on("dbChunk", onChunk);
+      // Checked as well as subscribed: the station has to be reached before this runs, so a caller
+      // that aborts during that connect has already fired by the time the listener is attached.
+      if (opts.signal?.aborted) return onAbort();
+      opts.signal?.addEventListener("abort", onAbort, { once: true });
+      try {
+        request();
+      } catch (error) {
+        settle(() => reject(error instanceof Error ? error : new Error(String(error))));
+      }
+    });
+  }
+
+  /** The station's own `admin_user_id`, which its database refuses the query without. */
+  private adminUserIdOf(stationSn: string): string | undefined {
+    return adminUserIdFrom(this.registry.list().find((d) => d.sn === stationSn)?.raw);
   }
 
   /**
