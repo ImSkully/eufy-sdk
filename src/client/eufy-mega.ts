@@ -130,22 +130,53 @@ function adminUserIdFrom(raw: unknown): string | undefined {
 }
 
 /**
- * The rows of a `CMD_DATABASE` reply, once the accumulated fragments form one whole JSON document.
+ * The first complete brace-balanced JSON object in the accumulated text, or `undefined` while none is.
  *
- * `undefined` while they do not. The frames carry no index, no total and no terminator, so the
- * document's own structure is the only completion signal in the stream — a parse that succeeds had
- * every byte, and a truncated accumulation cannot parse as a complete one.
+ * `JSON.parse` over the whole accumulation is the wrong test and fails on every real reply: the frames
+ * are level-1 blocks and the last one carries TRAILING PADDING past the document's closing brace, so
+ * the string is never valid JSON in its entirety no matter how much of it has arrived. Scanning to the
+ * brace that closes the first object ignores the padding and is reached only once every byte of the
+ * document is in hand — which is the completion signal the stream itself never states.
  *
- * The station wraps the table as `{cmd, count, data:[…]}`; a reply shaped otherwise answers its own
- * array, or none, rather than being reshaped into one.
+ * Quote-aware, so a brace inside a name cannot close the object early.
+ */
+function firstJsonObject(text: string): unknown {
+  const start = text.indexOf("{");
+  if (start < 0) return undefined;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) {
+      try {
+        return JSON.parse(text.slice(start, i + 1));
+      } catch {
+        return undefined;
+      }
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The rows of a `CMD_DATABASE` reply, once the accumulated fragments hold one whole document.
+ *
+ * `undefined` while they do not, which is what keeps a half-arrived table from answering short. The
+ * station wraps the rows as `{cmd, count, data:[…]}`; a reply shaped otherwise answers its own array,
+ * or none, rather than being reshaped into one.
  */
 function dbRowsOf(text: string): unknown[] | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
+  const parsed = firstJsonObject(text);
+  if (parsed === undefined) return undefined;
   if (Array.isArray(parsed)) return parsed;
   const data = (parsed as { data?: unknown } | null)?.data;
   return Array.isArray(data) ? data : [];

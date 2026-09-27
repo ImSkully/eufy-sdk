@@ -91,6 +91,20 @@ describe("getStationFaces", () => {
     expect(face).toMatchObject({ person_id: 3, group_id: 7, face_count: 4 });
   });
 
+  it("reads past the trailing padding a real reply carries", async () => {
+    // The frames are level-1 blocks and the last carries padding past the document's closing brace,
+    // so `JSON.parse` over the whole accumulation never succeeds on real hardware. Scanning to the
+    // brace that closes the first object is what makes the reply readable at all.
+    const { eufy } = harness([`${TABLE}\u0000\u0000\u0000garbage`]);
+    expect((await eufy.getStationFaces(STATION)).map((f) => f.name)).toEqual(["Alex", "stranger1"]);
+  });
+
+  it("is not closed early by a brace inside a name", async () => {
+    const braced = JSON.stringify({ data: [{ person_id: 8, name: "{ Alex }" }] });
+    const [face] = await harness([`${braced}  padding`]).eufy.getStationFaces(STATION);
+    expect(face!.name).toBe("{ Alex }");
+  });
+
   it("does not answer a truncated table as a complete one", async () => {
     // The whole point of parsing to decide completion: a fragment that stops mid-document is not
     // valid JSON, so it cannot resolve, and the read times out instead of reporting half a household.
