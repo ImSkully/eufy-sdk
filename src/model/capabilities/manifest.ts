@@ -67,13 +67,15 @@ export interface ActionDescriptor extends ActionSpec {
 export interface CapabilityDescriptor {
   capability: Capability;
   /**
-   * The fluent accessor this capability is reached under: `dev[accessor]()`.
+   * The name this capability is reached under: `dev[accessor]()`.
    *
-   * Absent for a capability with nothing to bind — one whose whole surface is inbound events, so it
-   * declares no members and no `actions()` and therefore has no object to reach. Such a capability is
-   * described for its {@link events} alone; every other field is empty.
+   * Always the camelCased capability id, including for one with nothing to bind — a capability whose
+   * whole surface is inbound events declares no members and no `actions()`, so the accessor names no
+   * object and `dev[accessor]` is `undefined`. Its empty {@link reads} and {@link actions} are what
+   * say so; the name is still stated, because a descriptor that omitted it would break every caller
+   * indexing by it to say nothing they cannot already read off those two.
    */
-  accessor?: string;
+  accessor: string;
   /** The reads INSTALLED on this device, never the theoretical set. */
   reads: readonly ReadDescriptor[];
   /** The installed actions that carry a description. */
@@ -120,7 +122,7 @@ export interface DeviceManifest {
  * declares no members and no `actions()`, so `buildActions` builds nothing for it and there is no
  * object here to walk. Its events are still device truth, and the resolved set in {@link
  * AvailabilityContext.capabilities} is what says this device has it — so it is described from its own
- * declaration, with no {@link CapabilityDescriptor.accessor} and every other field empty. Without
+ * declaration, with every field but {@link CapabilityDescriptor.events} empty. Without
  * this, a detection that exists only as a push reaches no caller: it is absent from `details` and
  * `capabilities` alone does not say what a capability emits.
  *
@@ -144,7 +146,7 @@ export function describeBound(
     if (!obj || typeof obj !== "object") {
       const events = anyBound ? emitsOf(m, [], ctx) : [];
       if (events.length && ctx?.capabilities?.has(m.capability)) {
-        out.push({ capability: m.capability, reads: [], actions: [], undescribedActions: [], events });
+        out.push({ capability: m.capability, accessor, reads: [], actions: [], undescribedActions: [], events });
       }
       continue;
     }
