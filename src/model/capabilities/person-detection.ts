@@ -1,5 +1,19 @@
 import { DoorbellPushEvent, HB3PairedDevicePushEvent } from "../push-events.js";
-import type { CapabilityModule } from "./types.js";
+import type { CapabilityModule, EventClaim } from "./types.js";
+
+/**
+ * Evidence a device deals in the IDENTIFIED person ids: it hangs off a station.
+ *
+ * 3111 and 3112 are declared in {@link HB3PairedDevicePushEvent} and in no other family's vocabulary,
+ * so a unit that stands alone is not in the population that issues them. 3102 carries no such claim:
+ * it is declared in the doorbell, indoor and HB3-paired vocabularies alike, so every camera family
+ * can announce a face, and a standalone camera keeps `personDetected` through it.
+ *
+ * Attachment to ANY station is the gate rather than to a HomeBase 3 specifically: the coarser test
+ * keeps the events on an attached camera whose station generation is not established, which is the
+ * direction that cannot lose a real detection.
+ */
+const IDENTIFIED_PERSON_CLAIM: EventClaim = { homeBaseAttached: true };
 
 /**
  * `person_detection` — human/AI detection.
@@ -20,10 +34,24 @@ export const PERSON_DETECTION: CapabilityModule = {
    * The two are split because they mean opposite things — "someone known is at the door" versus
    * "someone unrecognised" — and collapsing them loses the distinction the device went to the trouble
    * of making.
+   *
+   * Only 3102 reaches a standalone camera. The identified pair is claimed on station attachment, so a
+   * unit whose vocabulary cannot carry them is not described as emitting them — see
+   * {@link IDENTIFIED_PERSON_CLAIM}.
    */
   events: [
     { source: "push", match: DoorbellPushEvent.FACE_DETECTION, emit: "personDetected" },
-    { source: "push", match: HB3PairedDevicePushEvent.IDENTITY_PERSON_DETECTION, emit: "personDetected" },
-    { source: "push", match: HB3PairedDevicePushEvent.STRANGER_PERSON_DETECTION, emit: "strangerDetected" },
+    {
+      source: "push",
+      match: HB3PairedDevicePushEvent.IDENTITY_PERSON_DETECTION,
+      emit: "personDetected",
+      claim: IDENTIFIED_PERSON_CLAIM,
+    },
+    {
+      source: "push",
+      match: HB3PairedDevicePushEvent.STRANGER_PERSON_DETECTION,
+      emit: "strangerDetected",
+      claim: IDENTIFIED_PERSON_CLAIM,
+    },
   ],
 };
