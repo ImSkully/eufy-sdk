@@ -74,6 +74,9 @@ async function main(): Promise<void> {
   console.log("\ncurrent readings");
   const accessors = dev as unknown as Record<string, (() => Record<string, unknown> | undefined) | undefined>;
   for (const cap of manifest.details) {
+    // A capability whose whole surface is inbound events names no accessor: there are no readings to
+    // reach, only the events printed above.
+    if (cap.accessor === undefined) continue;
     const obj = accessors[cap.accessor]?.();
     if (!obj) continue;
     for (const r of cap.reads) {
