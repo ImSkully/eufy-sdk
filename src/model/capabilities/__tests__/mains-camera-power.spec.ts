@@ -10,23 +10,23 @@ import type { MediaProvider } from "../../../core/contracts.js";
 import type { EufyDevice } from "../../../core/types.js";
 
 /**
- * Issue #191: the T84A1 Wall Light Cam S100 is hardwired, but it reports battery-family params, so it
- * resolved `battery` and its standalone live stream was cut by the battery budget every ~57 s. A
- * confirmed mains-only model must stream unbounded, keep a persistent session and show no cell reading.
+ * A confirmed mains-only camera can still report battery-family parameters. Its stream and standalone
+ * session use the wired tier, and physical-cell readings remain withheld.
  */
 const SN = "T84A1P0000000001";
 const BATTERY_CAPS = new Set<Capability>(["camera", "battery"]);
 
-describe("mains-only camera power tier (T84A1 Wall Light Cam S100)", () => {
+describe("mains-only camera power tier", () => {
   it("classifies T84A1 as wired even with the battery capability resolved", () => {
     expect(cameraPowerTier("T84A1", BATTERY_CAPS)).toBe("wired");
     expect(cameraPowerTier(SN, BATTERY_CAPS)).toBe("wired");
+    expect(cameraPowerTier("T8423", BATTERY_CAPS)).toBe("wired");
     // A real battery camera is still budgeted, and a camera without the capability never is.
     expect(cameraPowerTier("T8114P0000000001", BATTERY_CAPS)).toBe("battery");
     expect(cameraPowerTier("T8114P0000000001", new Set(["camera"]))).toBe("wired");
   });
 
-  it("gives every media egress the wired tier, so no battery budget is armed", async () => {
+  it.each(["T84A1", "T8423"])("gives %s media egresses the wired tier", async (model) => {
     const seen: string[] = [];
     const media: MediaProvider = {
       snapshotLive: async (opts) => {
@@ -39,7 +39,7 @@ describe("mains-only camera power tier (T84A1 Wall Light Cam S100)", () => {
     const ctx: CommandContext = {
       channel: 0,
       codec: "camera",
-      model: "T84A1",
+      model,
       paramIds: new Set<number>([1101]),
       capabilities: BATTERY_CAPS,
     };
@@ -56,18 +56,19 @@ describe("mains-only camera power tier (T84A1 Wall Light Cam S100)", () => {
     expect(dev.getProperty("battery")).toBeUndefined();
   });
 
-  it("keeps a standalone T84A1's P2P session on the persistent wired tier", () => {
+  it.each(["T84A1", "T8423"])("keeps a standalone %s P2P session on the wired tier", (model) => {
     const eufy = new EufyMega({ email: "synthetic@example.com", password: "synthetic", autoRealtime: false });
+    const sn = `${model}P0000000001`;
     const device = {
-      sn: SN,
-      stationSn: SN,
-      model: "T84A1",
+      sn,
+      stationSn: sn,
+      model,
       category: "eufy_security",
       deviceClass: "camera",
       params: { 1101: "100" },
       raw: {},
     } as unknown as EufyDevice;
     vi.spyOn((eufy as any).registry, "list").mockReturnValue([device]);
-    expect((eufy as any).stationPower(SN)).toBe("wired");
+    expect((eufy as any).stationPower(sn)).toBe("wired");
   });
 });
