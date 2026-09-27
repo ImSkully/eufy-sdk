@@ -1070,9 +1070,9 @@ export class P2PCommandRouter {
    *
    * Reached two ways, both idempotent: the session's own `close` event, when it died while still the
    * station's registered session, and {@link SessionManagerOpts.onAutoClose}, when the manager closed it
-   * unasked. A close a CALLER made is deliberately not routed here — {@link closeAll} disposes its own
-   * sources first, and {@link replaceUnreachableSession} keeps its source alive on purpose to rewarm it
-   * on the replacement session.
+   * unasked. A close a CALLER made is deliberately not routed here — {@link closeAll} and
+   * {@link resolveSession} dispose their own sources first, while {@link replaceUnreachableSession} keeps
+   * its source alive on purpose to rewarm it on the replacement session.
    */
   private tearDownStation(stationSn: string): void {
     this.manager.remove(stationSn);
@@ -1426,10 +1426,9 @@ export class P2PCommandRouter {
    * A session whose {@link P2PSession.pathAnswering} is false is closed and re-resolved before it is handed
    * over: the station answers every heartbeat, so a path silent past several of them is gone. A session
    * reporting nothing about its path is not reporting that evidence and is handed over as it is. Cached live
-   * sources on the replaced session are discarded before closing it: each source captures its original session,
-   * so returning one after the replacement would send media starts to the dead path. Sources on independent
-   * media sessions remain attached. Replaced at most once per resolution, so a station whose replacement is
-   * silent too is returned rather than closed again.
+   * sources on the replaced session are discarded before closing it (see {@link tearDownStation}).
+   * Replaced at most once per resolution, so a station whose replacement is silent too is returned rather
+   * than closed again.
    */
   private async resolveSession(
     sn: string,
