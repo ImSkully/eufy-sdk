@@ -23,9 +23,11 @@ pull request.
    commits; wait for it to merge and branch from the result.
 4. **The smallest change that answers the need.** Reuse what exists (see Reuse before abstraction).
    No option, export, flag or field nobody asked for, no validation for input no caller sends, and no
-   spec that passes without the fix. Network policy (which peers or addresses a session may use) is the
-   host's firewall, not the SDK.
-5. **Finish before starting.** While a pull request of yours has changes requested, fix it or answer
+   spec that passes without the fix.
+5. **Stay in the SDK's job.** The SDK exposes what eufy's protocol does, backed by evidence from the
+   current vendor app. A behaviour the app doesn't have, or a choice about how a host should act (which
+   networks or peers to use, retries, caching, power or presentation policy), belongs in the host.
+6. **Finish before starting.** While a pull request of yours has changes requested, fix it or answer
    its threads before you open another. Only the reviewer resolves a review thread.
 
 ## Stack
