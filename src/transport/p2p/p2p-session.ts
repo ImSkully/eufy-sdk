@@ -821,10 +821,7 @@ export class P2PSession extends EventEmitter {
   private onMessage(msg: Buffer, rinfo: dgram.RemoteInfo, socket = this.socket): void {
     if (!socket) return;
     const fromConnectedPeer =
-      this.connected &&
-      socket === this.socket &&
-      this.connectAddress?.host === rinfo.address &&
-      this.connectAddress.port === rinfo.port;
+      this.connected && this.connectAddress?.host === rinfo.address && this.connectAddress.port === rinfo.port;
     if (
       fromConnectedPeer &&
       (hasHeader(msg, ResponseMessageType.PONG) ||
@@ -853,9 +850,7 @@ export class P2PSession extends EventEmitter {
     } else if (hasHeader(msg, ResponseMessageType.CAM_ID) || hasHeader(msg, ResponseMessageType.TURN_SERVER_CAM_ID)) {
       this.onConnected({ host: rinfo.address, port: rinfo.port }, socket);
     } else if (hasHeader(msg, ResponseMessageType.PONG)) {
-      if (!this.connected || fromConnectedPeer) {
-        this.lastPongData = msg.length > 4 ? msg.subarray(4) : undefined;
-      }
+      this.lastPongData = msg.length > 4 ? msg.subarray(4) : undefined;
     } else if (hasHeader(msg, ResponseMessageType.PING)) {
       this.send({ host: rinfo.address, port: rinfo.port }, RequestMessageType.PONG, undefined, socket); // echo
     } else if (hasHeader(msg, ResponseMessageType.ACK)) {

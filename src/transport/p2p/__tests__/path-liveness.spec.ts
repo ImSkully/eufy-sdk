@@ -78,33 +78,33 @@ describe("a session's path liveness", () => {
   });
 
   it("keeps an active path alive on selected-peer traffic even without a PONG", () => {
-    const { built, internals } = session();
-    const handlers = built as unknown as { onAck: () => void; onData: () => void };
-    handlers.onAck = vi.fn();
-    handlers.onData = vi.fn();
-    for (const type of [
-      ResponseMessageType.PONG,
-      ResponseMessageType.PING,
-      ResponseMessageType.ACK,
-      ResponseMessageType.DATA,
-    ]) {
-      internals.lastPeerAt = Date.now() - 16_000;
-      receive(built, type, "203.0.113.1");
-      expect(built.pathAnswering).toBe(true);
+    vi.useFakeTimers();
+    try {
+      const { built } = session();
+      const handlers = built as unknown as { onAck: () => void; onData: () => void };
+      handlers.onAck = vi.fn();
+      handlers.onData = vi.fn();
+      receive(built, ResponseMessageType.PONG, "203.0.113.1");
+      for (const type of [ResponseMessageType.ACK, ResponseMessageType.DATA, ResponseMessageType.PING]) {
+        vi.advanceTimersByTime(16_000);
+        expect(built.pathAnswering).toBe(false);
+        receive(built, type, "203.0.113.1");
+        expect(built.pathAnswering).toBe(true);
+      }
+    } finally {
+      vi.useRealTimers();
     }
   });
 
-  it("does not count another endpoint or a losing lookup socket as the selected peer", () => {
+  it("does not count another endpoint as the selected peer", () => {
     const { built, internals } = session();
-    const losingSocket = { send: vi.fn() } as unknown as dgram.Socket;
     internals.lastPeerAt = Date.now() - 16_000;
     receive(built, ResponseMessageType.PONG, "203.0.113.2");
     receive(built, ResponseMessageType.PONG, "203.0.113.1", 32101);
-    receive(built, ResponseMessageType.PONG, "203.0.113.1", 32100, losingSocket);
     expect(built.pathAnswering).toBe(false);
   });
 
-  it("retains a pre-connect PONG cookie without counting it as path evidence", () => {
+  it("retains PONG cookies without counting a pre-connect or other endpoint as path evidence", () => {
     const { built, internals } = session();
     const cookie = Buffer.from("synthetic-cookie");
     internals.connected = false;
@@ -112,6 +112,10 @@ describe("a session's path liveness", () => {
     expect(built.pathSilentMs).toBeUndefined();
     internals.connected = true;
     expect(internals.lastPongData).toEqual(cookie);
+    const nextCookie = Buffer.from("another-synthetic-cookie");
+    receive(built, ResponseMessageType.PONG, "203.0.113.2", 32100, undefined, nextCookie);
+    expect(internals.lastPongData).toEqual(nextCookie);
+    expect(built.pathSilentMs).toBeUndefined();
   });
 
   it("answers that a path with no post-connect peer traffic is not known to be dead", () => {
