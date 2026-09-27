@@ -25,8 +25,9 @@ pull request.
    No option, export, flag or field nobody asked for, no validation for input no caller sends, and no
    spec that passes without the fix.
 5. **Stay in the SDK's job.** The SDK exposes what eufy's protocol does, backed by evidence from the
-   current vendor app. A behaviour the app doesn't have, or a choice about how a host should act (which
-   networks or peers to use, retries, caching, power or presentation policy), belongs in the host.
+   current vendor app, including the caching, power handling and retries that speaking it needs. A
+   behaviour the app doesn't have, or a host choice that overrides what the device reports (which peers
+   to use, a power tier the device doesn't state), belongs in the host.
 6. **Finish before starting.** While a pull request of yours has changes requested, fix it or answer
    its threads before you open another. Only the reviewer resolves a review thread.
 
