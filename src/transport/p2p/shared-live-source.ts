@@ -75,7 +75,7 @@ export interface SharedLiveSourceOptions {
    * that serves one camera at a time.
    */
   makeStream: (ctx: { reassertWanted: () => boolean }) => LiveStreamHandle;
-  /** No-consumer grace before teardown (default 8000ms; 0 schedules teardown next tick). */
+  /** No-consumer grace before teardown (default 8000ms; 0 schedules teardown next tick). Distinct from the stream's keepalive. */
   lingerMs?: number;
   /** Per-consumer bounded queue depth; overflow → drop-to-keyframe (default 900 ≈ 30s @ 30fps). */
   maxQueue?: number;
@@ -857,11 +857,9 @@ export class SharedLiveSource {
       .map((item) => item.frame);
   }
 
-  /** A finite request is capped at the retained window before its duration is validated. */
   private bufferedMedia(seconds: number): TimedMediaFrame[] {
-    if (!Number.isFinite(seconds) || !this.ring.length) return [];
-    const requested = timerMs(Math.min(seconds * 1000, this.preBufferMs), 0);
-    if (requested <= 0) return [];
+    const requested = Number.isFinite(seconds) ? Math.min(seconds * 1000, this.preBufferMs) : 0;
+    if (requested <= 0 || !this.ring.length) return [];
     const start = this.windowStart(Date.now() - requested);
     return this.isKeyframe(this.ring[start]) ? this.ring.slice(start) : [];
   }
