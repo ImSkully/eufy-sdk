@@ -223,9 +223,9 @@ export function parseQuickResponses(
 export const DOORBELL_MEMBERS = {
   /**
    * The HOMEBASE as the doorbell's chime — the hub plays the ring, not the wired chime box
-   * `mechanicalChimeSwitch` drives. `provenance` is "verified" on our own decrypt of the app's frame,
-   * not merely the param id observed live: direct-binary `[ch][value][acct]`, 1=on/0=off, the same shape
-   * as its 1703 sibling — captured, not inferred from the shared param range.
+   * `mechanicalChimeSwitch` drives. `provenance` is "verified" on our own decrypt of the app's frame:
+   * direct-binary `[ch][value][acct]`, 1=on/0=off, the same shape as its 1703 sibling — captured, not
+   * inferred from the shared param range.
    */
   chimeSwitch: {
     param: DOORBELL_CMD.CHIME_SWITCH,
@@ -274,7 +274,7 @@ export const DOORBELL_MEMBERS = {
     type: "number",
     unit: "%",
     kind: "percent",
-    provenance: "mega",
+    provenance: "verified",
     writtenElsewhere: true,
     description:
       "Ringtone volume (1708; confirmed on T8214, observed value 80). The WRITE is `audio`'s " +
@@ -406,7 +406,7 @@ export const DOORBELL_MEMBERS = {
     param: 1710,
     type: "string",
     kind: "text",
-    provenance: "mega",
+    provenance: "verified",
     description:
       "Notification config JSON {notification_motion_onoff,notification_ring_onoff," +
       "notification_style} (1710; confirmed on T8214).",

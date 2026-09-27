@@ -168,10 +168,11 @@ export function isKnownValueKind(kind: ValueKind): kind is KnownValueKind {
 /**
  * How much a param's name and meaning can be trusted, most-trusted first. This is the one definition;
  * the param dictionary and every `provenance` field use it.
- *  - `mega`     — stated by the vendor's own cloud: a real device's params as the mega API reports
- *                 them, or the cloud's data-point catalog (`get_product_data_point`).
- *  - `verified` — seen on a real device: our own capture or observation of the param changing.
- *  - `apk`      — the v6 app's own decompiled constant name, not yet seen on a device.
+ *  - `mega`     — the vendor's cloud names it: its data-point catalog (`get_product_data_point`), or a
+ *                 reported value that matches what the cloud record already says (a model name or code).
+ *  - `verified` — confirmed on a real device by this project: our own capture or observation, or
+ *                 identified by someone who has the hardware.
+ *  - `apk`      — the v6 app's own decompiled constant name, not yet confirmed on a device.
  *  - `guessed`  — no name source; a plausible placeholder until a toggle-diff settles it.
  *
  * A third-party reverse-engineering project is never a source: every name we ship comes from the
