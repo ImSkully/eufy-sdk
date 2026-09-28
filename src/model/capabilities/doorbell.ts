@@ -202,7 +202,7 @@ export function parseQuickResponses(
 
 /**
  * `doorbell` — chime / ringtone configuration. CONFIRMED against a real Video Doorbell (T8214):
- * the live ids are the `1702-1719` `CMD_BAT_DOORBELL_*` range (provenance "mega", observed). The
+ * the live ids are the `1702-1719` `CMD_BAT_DOORBELL_*` range, observed on that device. The
  * legacy `2015/2022/1306` ids are excluded — they appear on NO owned device. The button-
  * press *event* (ring) is delivered out-of-band via `CMD_DOORBELL_NOTIFY_PAYLOAD` (1701) /
  * push/MQTT — it is handled by the Phase-1 event normalizers, not as a device-list param.
@@ -238,9 +238,8 @@ export const DOORBELL_MEMBERS = {
     write: (v, ctx) => setScalar(DOORBELL_CMD.CHIME_SWITCH, asBool(v) ? 1 : 0, ctx, "direct-binary"),
   },
   /**
-   * `provenance` is "verified" not "mega": the actual write wire is confirmed (
-   * our own P2P decrypt), not merely the param id observed on a live device. Direct-binary
-   * `[ch][value][acct]`, 1=on/0=off — verified live on a T8214 (ON then OFF).
+   * `provenance` is "verified" on our own P2P decrypt of the write wire: direct-binary
+   * `[ch][value][acct]`, 1=on/0=off, verified live on a T8214 (ON then OFF).
    */
   mechanicalChimeSwitch: {
     param: DOORBELL_CMD.MECHANICAL_CHIME_SWITCH,
