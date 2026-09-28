@@ -119,67 +119,11 @@ function recordString(raw: Record<string, unknown>, key: string): string | undef
   return typeof v === "string" && v ? v : undefined;
 }
 
-/** How long a station's database reply has to arrive whole, when the caller states no bound. */
-const DB_TABLE_TIMEOUT_MS = 15_000;
-
 /** The owning member's `admin_user_id` off a raw device record, which its station scopes writes to. */
 function adminUserIdFrom(raw: unknown): string | undefined {
   const member = ((raw ?? {}) as Record<string, unknown>).member as Record<string, unknown> | undefined;
   const id = member?.admin_user_id;
   return typeof id === "string" && id ? id : undefined;
-}
-
-/**
- * The first complete brace-balanced JSON object in the accumulated text, or `undefined` while none is.
- *
- * `JSON.parse` over the whole accumulation is the wrong test and fails on every real reply: the frames
- * are level-1 blocks and the last one carries TRAILING PADDING past the document's closing brace, so
- * the string is never valid JSON in its entirety no matter how much of it has arrived. Scanning to the
- * brace that closes the first object ignores the padding and is reached only once every byte of the
- * document is in hand — which is the completion signal the stream itself never states.
- *
- * Quote-aware, so a brace inside a name cannot close the object early.
- */
-function firstJsonObject(text: string): unknown {
-  const start = text.indexOf("{");
-  if (start < 0) return undefined;
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i];
-    if (inString) {
-      if (escaped) escaped = false;
-      else if (c === "\\") escaped = true;
-      else if (c === '"') inString = false;
-      continue;
-    }
-    if (c === '"') inString = true;
-    else if (c === "{") depth++;
-    else if (c === "}" && --depth === 0) {
-      try {
-        return JSON.parse(text.slice(start, i + 1));
-      } catch {
-        return undefined;
-      }
-    }
-  }
-  return undefined;
-}
-
-/**
- * The rows of a `CMD_DATABASE` reply, once the accumulated fragments hold one whole document.
- *
- * `undefined` while they do not, which is what keeps a half-arrived table from answering short. The
- * station wraps the rows as `{cmd, count, data:[…]}`; a reply shaped otherwise answers its own array,
- * or none, rather than being reshaped into one.
- */
-function dbRowsOf(text: string): unknown[] | undefined {
-  const parsed = firstJsonObject(text);
-  if (parsed === undefined) return undefined;
-  if (Array.isArray(parsed)) return parsed;
-  const data = (parsed as { data?: unknown } | null)?.data;
-  return Array.isArray(data) ? data : [];
 }
 
 /**
@@ -1936,24 +1880,17 @@ export class EufyMega extends EventEmitter {
   }
 
   /**
-   * The people enrolled on a station, read from its own database over P2P.
+   * The people enrolled on a station, read from its own `person_basic_info` table over P2P.
    *
    * The cloud roster (`api.getFaces()`) answers empty for an account that keeps its faces on the
-   * station, because they were never uploaded — the station holds them. `person_basic_info` is where
-   * they live, and `P2PSession.requestFaces` is the query the app itself issues for them.
+   * station, because they were never uploaded — the station holds them.
    *
-   * Resolves with the rows the station returned, or an empty list when it returns none. Rejects on a
-   * station that cannot be reached, and on {@link StationFacesOptions.timeoutMs} elapsing before a
-   * complete reply arrives.
+   * Resolves with the rows the station returned. Rejects on a station that cannot be reached, on a
+   * record stating no `admin_user_id`, and on the reply not arriving whole in time. Assembling that
+   * reply is `P2PSession.readDatabase`'s; this resolves which station and which account id.
    *
-   * Completion is the parse. The station streams the table as `CMD_DATABASE` frames whose decrypted
-   * text is a fragment of one JSON document, so the fragments are concatenated and parsed after each
-   * one: the first parse that succeeds is the whole document, and a truncated accumulation cannot
-   * masquerade as a complete one. A reply that never parses times out rather than answering with a
-   * partial table — this answers the station's rows or nothing, never a guess at them.
-   *
-   * `stranger<n>` names are the station's own auto-assigned placeholders for a face nobody has named,
-   * and are returned as they arrive; a caller that wants only named people filters them.
+   * `stranger<n>` names are the station's own placeholders for a face nobody has named, and are
+   * returned as they arrive; a caller that wants only named people filters them.
    */
   async getStationFaces(stationSn: string, opts: StationFacesOptions = {}): Promise<StationFace[]> {
     if (!this.registry.list().length) await this.getDevices();
@@ -1965,55 +1902,8 @@ export class EufyMega extends EventEmitter {
     const session = this.p2p.getSessions().get(station);
     if (!session) throw new Error(`getStationFaces: no P2P session for ${station}`);
 
-    const rows = await this.collectDbTable(session, station, opts, () => session.requestFaces({ accountId }));
+    const rows = await session.readDatabase("person_basic_info", { accountId, ...opts });
     return rows.filter((row): row is StationFace => typeof row === "object" && row !== null);
-  }
-
-  /**
-   * Accumulate one `CMD_DATABASE` reply and answer its rows.
-   *
-   * The chunks carry no index, no total and no terminator, so there is nothing to count down; what
-   * they do carry is one JSON document split across them. Parsing the accumulation after every chunk
-   * uses the document's own structure as the completion signal, which is the only evidence in the
-   * stream that the reply is whole.
-   */
-  private collectDbTable(
-    session: P2PSession,
-    stationSn: string,
-    opts: StationFacesOptions,
-    request: () => void,
-  ): Promise<unknown[]> {
-    return new Promise<unknown[]>((resolve, reject) => {
-      let text = "";
-      const onChunk = (chunk: { stationSn: string; text: string }): void => {
-        if (chunk.stationSn !== stationSn) return;
-        text += chunk.text;
-        const rows = dbRowsOf(text);
-        if (rows) settle(() => resolve(rows));
-      };
-      const timer = setTimeout(
-        () => settle(() => reject(new Error(`getStationFaces: ${stationSn} sent no complete reply`))),
-        opts.timeoutMs ?? DB_TABLE_TIMEOUT_MS,
-      );
-      const onAbort = (): void => settle(() => reject(new Error("getStationFaces: aborted")));
-      const settle = (finish: () => void): void => {
-        clearTimeout(timer);
-        session.off("dbChunk", onChunk);
-        opts.signal?.removeEventListener("abort", onAbort);
-        finish();
-      };
-
-      session.on("dbChunk", onChunk);
-      // Checked as well as subscribed: the station has to be reached before this runs, so a caller
-      // that aborts during that connect has already fired by the time the listener is attached.
-      if (opts.signal?.aborted) return onAbort();
-      opts.signal?.addEventListener("abort", onAbort, { once: true });
-      try {
-        request();
-      } catch (error) {
-        settle(() => reject(error instanceof Error ? error : new Error(String(error))));
-      }
-    });
   }
 
   /** The station's own `admin_user_id`, which its database refuses the query without. */
