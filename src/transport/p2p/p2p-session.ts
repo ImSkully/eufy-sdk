@@ -1582,8 +1582,7 @@ export class P2PSession extends EventEmitter {
     c.setAAD(GCM_AAD);
     const ct = Buffer.concat([c.update(plaintext), c.final()]);
     const sub = Buffer.alloc(4);
-    sub.writeUInt32LE((LEVEL2_SEQ_BASE + this.level2Seq) >>> 0);
-    this.level2Seq = (this.level2Seq + 1) >>> 0;
+    sub.writeUInt32LE((LEVEL2_SEQ_BASE + this.level2Seq++) >>> 0);
     return Buffer.concat([c.getAuthTag(), nonce, sub, ct]);
   }
 
