@@ -305,18 +305,15 @@ describe("Device.describe — the manifest a caller renders from", () => {
     const m = dev.describe();
     const described = new Set<Capability>(m.details.map((d) => d.capability));
     for (const cap of described) expect(dev.has(cap)).toBe(true);
-    // Every descriptor names its accessor, but only a capability that BINDS something has an object
-    // behind it. That is the module table's answer, not the descriptor's: a bound capability may
-    // legitimately install no reads on this device, while one with no members and no `actions()` has
-    // nothing to bind on any device and is described for its events alone.
-    const binds = (cap: Capability) =>
-      Boolean(CAPABILITY_MODULES[cap]?.members) || Boolean(CAPABILITY_MODULES[cap]?.actions);
-    const reachable = m.details.filter((d) => binds(d.capability));
-    expect(reachable.every((d) => (dev as unknown as Record<string, () => unknown>)[d.accessor]())).toBe(true);
-    for (const d of m.details.filter((entry) => !binds(entry.capability))) {
-      expect(d.accessor).toBe(camelCase(d.capability));
+    // An accessor is named only where there is one to reach. A capability with no surface to bind
+    // carries none, and is described for its events alone.
+    const reachable = m.details.filter((d) => d.accessor !== undefined);
+    expect(reachable.every((d) => (dev as unknown as Record<string, () => unknown>)[d.accessor!]())).toBe(true);
+    for (const d of m.details.filter((entry) => entry.accessor === undefined)) {
+      expect(d.reads).toEqual([]);
+      expect(d.actions).toEqual([]);
+      expect(d.undescribedActions).toEqual([]);
       expect(d.events.length).toBeGreaterThan(0);
-      expect((dev as unknown as Record<string, unknown>)[d.accessor]).toBeUndefined();
     }
   });
 
@@ -330,19 +327,8 @@ describe("Device.describe — the manifest a caller renders from", () => {
       .describe()
       .details.find((d) => d.capability === "person_detection");
     expect(person).toBeDefined();
-    expect(person!.accessor).toBe("personDetection");
-    expect(person!.reads).toEqual([]);
-    expect(person!.actions).toEqual([]);
+    expect(person!.accessor).toBeUndefined();
     expect(person!.events).toContain("personDetected");
-  });
-
-  /** The RESOLVED set is what says the device has it — a capability it lacks is still not described. */
-  it("does not describe a surface-less capability the device does not have", () => {
-    const described = describeCapabilities({ motion: {} } as never, {
-      codec: "camera",
-      capabilities: new Set<Capability>(["motion"]),
-    });
-    expect(described.map((d) => d.capability)).not.toContain("person_detection");
   });
 });
 

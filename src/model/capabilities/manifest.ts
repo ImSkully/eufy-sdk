@@ -67,15 +67,13 @@ export interface ActionDescriptor extends ActionSpec {
 export interface CapabilityDescriptor {
   capability: Capability;
   /**
-   * The name this capability is reached under: `dev[accessor]()`.
+   * The fluent accessor this capability is reached under: `dev[accessor]()`.
    *
-   * Always the camelCased capability id, including for one with nothing to bind — a capability whose
-   * whole surface is inbound events declares no members and no `actions()`, so the accessor names no
-   * object and `dev[accessor]` is `undefined`. Its empty {@link reads} and {@link actions} are what
-   * say so; the name is still stated, because a descriptor that omitted it would break every caller
-   * indexing by it to say nothing they cannot already read off those two.
+   * Absent for a capability with nothing to bind — one whose whole surface is inbound events, so it
+   * declares no members and no `actions()` and therefore has no object to reach. Such a capability is
+   * described for its {@link events} alone; every other field is empty.
    */
-  accessor: string;
+  accessor?: string;
   /** The reads INSTALLED on this device, never the theoretical set. */
   reads: readonly ReadDescriptor[];
   /** The installed actions that carry a description. */
@@ -122,9 +120,8 @@ export interface DeviceManifest {
  * declares no members and no `actions()`, so `buildActions` builds nothing for it and there is no
  * object here to walk. Its events are still device truth, and the resolved set in {@link
  * AvailabilityContext.capabilities} is what says this device has it — so it is described from its own
- * declaration, with every field but {@link CapabilityDescriptor.events} empty. Without
- * this, a detection that exists only as a push reaches no caller: it is absent from `details` and
- * `capabilities` alone does not say what a capability emits.
+ * declaration, with no {@link CapabilityDescriptor.accessor} and every other field empty, and only on
+ * a device with at least one bound object.
  *
  * Claims resolve against an empty read set there, which is the truthful evidence — a module that binds
  * nothing installs no getter, so a `reads` claim cannot hold. A topology claim still applies.
@@ -136,9 +133,6 @@ export function describeBound(
   ctx?: AvailabilityContext,
 ): CapabilityDescriptor[] {
   const out: CapabilityDescriptor[] = [];
-  // Nothing bound at all is an unbound device, and its details stay empty whatever it has: the
-  // surface-less branch below describes a capability ALONGSIDE the ones a live object was walked for,
-  // never on its own. See {@link DeviceManifest.bound}.
   const anyBound = Object.values(bound).some((obj) => obj && typeof obj === "object");
   for (const m of modules) {
     const accessor = camelCase(m.capability);
@@ -146,7 +140,7 @@ export function describeBound(
     if (!obj || typeof obj !== "object") {
       const events = anyBound ? emitsOf(m, [], ctx) : [];
       if (events.length && ctx?.capabilities?.has(m.capability)) {
-        out.push({ capability: m.capability, accessor, reads: [], actions: [], undescribedActions: [], events });
+        out.push({ capability: m.capability, reads: [], actions: [], undescribedActions: [], events });
       }
       continue;
     }

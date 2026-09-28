@@ -34,10 +34,6 @@ export const PERSON_DETECTION: CapabilityModule = {
    * The two are split because they mean opposite things — "someone known is at the door" versus
    * "someone unrecognised" — and collapsing them loses the distinction the device went to the trouble
    * of making.
-   *
-   * Only 3102 reaches a standalone camera. The identified pair is claimed on station attachment, so a
-   * unit whose vocabulary cannot carry them is not described as emitting them — see
-   * {@link IDENTIFIED_PERSON_CLAIM}.
    */
   events: [
     { source: "push", match: DoorbellPushEvent.FACE_DETECTION, emit: "personDetected" },

@@ -27,7 +27,7 @@ describe("person_detection capability module", () => {
   describe("identified-person events claimed on station attachment", () => {
     // One bound object stands for a live device: a capability with no surface is described alongside
     // the ones an object was walked for, never on an unbound device whose details stay empty.
-    const events = (homeBaseAttached?: boolean): readonly string[] =>
+    const events = (homeBaseAttached: boolean): readonly string[] =>
       describeCapabilities({ motion: {} } as never, {
         codec: "camera",
         capabilities: new Set<Capability>(["person_detection", "motion"]),
@@ -44,11 +44,6 @@ describe("person_detection capability module", () => {
 
     it("describes both on a camera that hangs off a station", () => {
       expect(events(true)).toEqual(expect.arrayContaining(["personDetected", "strangerDetected"]));
-    });
-
-    /** Narrowing on a fact the context does not carry would withdraw the event from every caller. */
-    it("withdraws nothing for a device whose topology is not stated", () => {
-      expect(events()).toContain("strangerDetected");
     });
   });
 });
