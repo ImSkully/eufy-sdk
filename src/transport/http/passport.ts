@@ -10,7 +10,10 @@ export function loginCredentials(email: string, password: string, country: strin
   return { email, password: encryptedPassword, ab: country, client_secret_info: { public_key: clientPublicKeyHex } };
 }
 
-/** Read a decrypted `/passport/login` reply; `undefined` when it carries no id or no token. */
+/**
+ * Read a decrypted `/passport/login` reply; `undefined` when it carries no id or no token. `twoFactorPending`
+ * is true while `fa_info.info` is non-empty and false once 2FA is satisfied.
+ */
 export function readLoginReply(data: Record<string, unknown>) {
   const userId = (data.ap_cloud_user_id ?? data.user_id ?? data.userId) as string | undefined;
   const authToken = (data.auth_token ?? data.token) as string | undefined;
@@ -21,7 +24,6 @@ export function readLoginReply(data: Record<string, unknown>) {
     authToken,
     geoKey: data.geo_key as string | undefined,
     tokenExpiresAt: Number(data.token_expires_at ?? 0) || 0,
-    // `fa_info.info` is non-empty while the passport still wants a 2FA code, and empties once satisfied.
     twoFactorPending: !!((data.fa_info ?? {}) as { info?: string }).info,
   };
 }
