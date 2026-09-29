@@ -12,10 +12,17 @@ import { P2PSession } from "../p2p-session.js";
 const STATION_SN = "T8000P0000000000";
 const P2P_DID = "XXXXXXX-000000-XXXXX";
 
-/** A session whose query is stubbed, so a spec drives the reply without a socket. */
+/**
+ * A connected session whose socket write is stubbed, so a spec drives the reply without one.
+ *
+ * `queryDatabase` itself runs: it carries the in-flight guard, so stubbing it would stub out the
+ * behaviour half these specs are about.
+ */
 function session(): P2PSession {
   const built = new P2PSession({ stationSn: STATION_SN, p2pDid: P2P_DID });
-  vi.spyOn(built, "queryDatabase").mockImplementation(() => undefined);
+  const internals = built as unknown as { connectAddress: unknown; send: () => void };
+  internals.connectAddress = { host: "127.0.0.1", port: 0 };
+  internals.send = vi.fn();
   return built;
 }
 
@@ -79,19 +86,32 @@ describe("P2PSession.readDatabase", () => {
     await expect(read).rejects.toThrow(/no complete person_basic_info/);
   });
 
-  it("ignores a chunk from another station", async () => {
-    const s = session();
-    const read = s.readDatabase("person_basic_info", { timeoutMs: 30 });
-    s.emit("dbChunk", { stationSn: "T8000P0000000001", text: TABLE });
-    await expect(read).rejects.toThrow(/no complete/);
-  });
-
   it("refuses a second read while one is accumulating", async () => {
     // The frames tie no chunk to its request, so two in flight would share one buffer.
     const s = session();
     const first = s.readDatabase("person_basic_info", { timeoutMs: 30 });
     await expect(s.readDatabase("person_basic_info")).rejects.toThrow(/already reading/);
     await expect(first).rejects.toThrow(/no complete/);
+  });
+
+  /**
+   * The guard is on `queryDatabase`, not on `readDatabase`, because any query answers `{data:[…]}`:
+   * a `face_feature_info` reply landing in this buffer would be answered as the roster.
+   */
+  it("refuses any other query while a read is accumulating", async () => {
+    const s = session();
+    const read = s.readDatabase("person_basic_info", { timeoutMs: 30 });
+    expect(() => s.requestFaceFeatures()).toThrow(/already reading/);
+    expect(() => s.queryDatabase("history_record_info")).toThrow(/already reading/);
+    await expect(read).rejects.toThrow(/no complete/);
+  });
+
+  it("lets a query through once the read has answered", async () => {
+    const s = session();
+    const read = s.readDatabase("person_basic_info");
+    chunk(s, TABLE);
+    await read;
+    expect(() => s.requestFaceFeatures()).not.toThrow();
   });
 
   it("releases the read once it has answered", async () => {

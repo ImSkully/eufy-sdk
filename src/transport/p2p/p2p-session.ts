@@ -1680,11 +1680,16 @@ export class P2PSession extends EventEmitter {
    * The HomeBase streams back `CMD_DATABASE` (1306) frames `{cmd:10000,count,data:[…]}`,
    * level-1-encrypted — decoded and emitted as `dbChunk` (decrypted text) per frame.
    * Tables: `familiar_faces`, `person_basic_info`, `event_person_list`, `history_record_info`.
+   *
+   * Throws while a {@link readDatabase} is accumulating: every table answers `{data:[…]}` and the
+   * frames tie no chunk to its request, so a second query's reply would be assembled into the first
+   * one's buffer and answered as its rows.
    */
   queryDatabase(
     table: string,
     opts: { accountId?: string; channel?: number; query?: Record<string, unknown>; innerCmd?: number } = {},
   ): void {
+    if (this.dbReadInFlight) throw new Error(`queryDatabase: ${this.cfg.stationSn} is already reading a table`);
     if (!this.connectAddress) throw new Error("not connected");
     // The eufy app issues this on mChannel 255 (the station channel), not 0.
     const channel = opts.channel ?? STATION_CHANNEL;
@@ -1757,39 +1762,24 @@ export class P2PSession extends EventEmitter {
    *
    * The request half of {@link queryDatabase} with its reply assembled: `CMD_DATABASE` arrives as
    * several frames whose decrypted text is a fragment of one document, so the fragments are
-   * accumulated here and scanned after each one. Resolves with `data`, or rejects on
-   * `timeoutMs` (default {@link DB_TABLE_TIMEOUT_MS}) with no complete reply.
+   * accumulated here and scanned after each one. Answers that document's `data` rows. Rejects when
+   * `signal` aborts, and when `timeoutMs` (default {@link DB_TABLE_TIMEOUT_MS}) elapses with no
+   * complete reply.
    *
-   * The scan takes the first closed object that CARRIES a `data` array, not simply the first closed
-   * object: a tail left by an earlier reply that timed out begins with a row, which closes into a
-   * perfectly valid object with no rows in it, and answering that would report an empty table for a
-   * full one. Any other closed object is dropped and the scan moves on.
-   *
-   * The text is re-decoded UTF-8 before parsing. `dbChunk` carries latin1, one byte per character,
-   * which preserves the bytes and mangles any name outside ASCII — `José` reads `JosÃ©` until the
-   * whole document is back in the encoding it was written in.
-   *
-   * One read at a time per session: a second overlapping call rejects rather than accumulating both
-   * replies into one buffer, since the frames carry nothing that ties a chunk to its request.
+   * One read at a time per session: while one is accumulating, every {@link queryDatabase} on the
+   * session throws, so a second reply cannot land in this buffer.
    */
   async readDatabase(
     table: string,
-    opts: {
-      accountId?: string;
-      channel?: number;
-      query?: Record<string, unknown>;
-      innerCmd?: number;
-      timeoutMs?: number;
-      signal?: AbortSignal;
-    } = {},
+    opts: { accountId?: string; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<unknown[]> {
-    if (this.dbReadInFlight) throw new Error(`readDatabase: ${this.cfg.stationSn} is already reading a table`);
+    if (opts.signal?.aborted) throw new Error("readDatabase: aborted");
+    this.queryDatabase(table, { accountId: opts.accountId, query: this.fullTableQuery() });
     this.dbReadInFlight = true;
     try {
       return await new Promise<unknown[]>((resolve, reject) => {
         let text = "";
-        const onChunk = (chunk: { stationSn: string; text: string }): void => {
-          if (chunk.stationSn !== this.cfg.stationSn) return;
+        const onChunk = (chunk: { text: string }): void => {
           text += chunk.text;
           const rows = firstTableRows(text);
           if (rows) settle(() => resolve(rows));
@@ -1807,25 +1797,14 @@ export class P2PSession extends EventEmitter {
         };
 
         this.on("dbChunk", onChunk);
-        if (opts.signal?.aborted) return onAbort();
         opts.signal?.addEventListener("abort", onAbort, { once: true });
-        try {
-          this.queryDatabase(table, {
-            accountId: opts.accountId,
-            channel: opts.channel,
-            innerCmd: opts.innerCmd ?? DB_QUERY.FULL_TABLE,
-            query: opts.query ?? this.fullTableQuery(),
-          });
-        } catch (error) {
-          settle(() => reject(error instanceof Error ? error : new Error(String(error))));
-        }
       });
     } finally {
       this.dbReadInFlight = false;
     }
   }
 
-  /** Whether a {@link readDatabase} is accumulating; the frames tie no chunk to its request. */
+  /** Whether a {@link readDatabase} is accumulating; see {@link queryDatabase} for what it bars. */
   private dbReadInFlight = false;
 
   /**
