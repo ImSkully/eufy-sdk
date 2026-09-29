@@ -257,6 +257,9 @@ const DB_QUERY = { FULL_TABLE: 10000, COMBINATION_WITH_AI: 10011 } as const;
 /** AAD for the level-2 (gateway/"signCode 8") AES-256-GCM frames — fixed across all eufy P2P. */
 const GCM_AAD = Buffer.from("eufy security");
 
+/** The level-2 sub-header, counted as one little-endian uint32 from `[00, 03, 02, 01]`. */
+const LEVEL2_SEQ_BASE = 0x01020300;
+
 /**
  * Transport wiring for a PPCS session — internal to the SDK; a host reaches sessions through the facade.
  * @internal
@@ -1503,11 +1506,6 @@ export class P2PSession extends EventEmitter {
   }
 
   /**
-   * Encrypt a level-2 command body (signCode 8): `tag(16) ‖ nonce(12) ‖ [seq,03,02,01](4) ‖
-   * ciphertext`, AES-256-GCM under the negotiated session key, AAD "eufy security". Inverse of
-   * `decryptLevel2`. The 4-byte sub-header is cleartext (skipped on decrypt); `seq` is a counter.
-   */
-  /**
    * Decode a `CMD_VIDEO_FRAME` (1300) payload into clean Annex-B H.264 (the 22-byte frame header
    * stripped). Reversed from the V6 app + live H.264 captures: the 22-byte header is
    * `[0:4]len [4]keyframe [5]streamType [6:8]seq [8:10]fps [10:12]W [12:14]H [14:20]ts`. When the
@@ -1572,14 +1570,19 @@ export class P2PSession extends EventEmitter {
     return this.rsaModulusHex;
   }
 
+  /**
+   * Encrypt a level-2 command body (signCode 8): `tag(16) ‖ nonce(12) ‖ seq(4) ‖ ciphertext`,
+   * AES-256-GCM under the negotiated session key, AAD "eufy security". Inverse of `decryptLevel2`.
+   * The 4-byte sub-header is cleartext (skipped on decrypt); `seq` counts up from {@link LEVEL2_SEQ_BASE}.
+   */
   private encryptLevel2(plaintext: Buffer): Buffer | undefined {
     if (!this.level2Key) return undefined;
     const nonce = randomBytes(12);
     const c = createCipheriv("aes-256-gcm", this.level2Key, nonce);
     c.setAAD(GCM_AAD);
     const ct = Buffer.concat([c.update(plaintext), c.final()]);
-    const sub = Buffer.from([this.level2Seq & 0xff, 0x03, 0x02, 0x01]);
-    this.level2Seq = (this.level2Seq + 1) & 0xff;
+    const sub = Buffer.alloc(4);
+    sub.writeUInt32LE((LEVEL2_SEQ_BASE + this.level2Seq++) >>> 0);
     return Buffer.concat([c.getAuthTag(), nonce, sub, ct]);
   }
 
