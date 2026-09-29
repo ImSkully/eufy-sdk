@@ -23,7 +23,8 @@ pull request.
    commits; wait for it to merge and branch from the result.
 4. **The smallest change that answers the need.** Reuse what exists (see Reuse before abstraction).
    No option, export, flag or field nobody asked for, no validation for input no caller sends, and no
-   spec that passes without the fix.
+   spec that passes without the fix. An option that is asked for keeps today's behaviour by default: a
+   new behaviour ships disabled, and one that always ran and becomes configurable stays enabled.
 5. **Stay in the SDK's job.** The SDK exposes what eufy's protocol does, backed by evidence from the
    current vendor app, including the caching, power handling and retries that speaking it needs. A
    behaviour the app doesn't have, or a host choice that overrides what the device reports (which peers
