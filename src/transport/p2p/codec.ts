@@ -40,8 +40,7 @@ export const ResponseMessageType = {
   CAM_ID: Buffer.from([0xf1, 0x42]),
   /**
    * The device's own address record, sent in answer to CHECK_CAM ahead of CAM_ID: its 20-byte device id, one
-   * record in `encodeSelfAddress`'s shape naming the address it answers from, then 8 zero bytes (44-byte
-   * payload). Measured on a T8354: 51 copies within about 300 ms, then CAM_ID.
+   * record in `encodeSelfAddress`'s shape naming the address it answers from, then 8 zero bytes (44-byte payload).
    */
   CAM_ADDR: Buffer.from([0xf1, 0x43]),
   TURN_SERVER_CAM_ID: Buffer.from([0xf1, 0x84]),
