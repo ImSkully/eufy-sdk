@@ -38,6 +38,12 @@ export const ResponseMessageType = {
   LOOKUP_ADDR: Buffer.from([0xf1, 0x40]),
   LOOKUP_ADDR2: Buffer.from([0xf1, 0x82]),
   CAM_ID: Buffer.from([0xf1, 0x42]),
+  /**
+   * The device's own address record, sent in answer to CHECK_CAM ahead of CAM_ID: its 20-byte device id, one
+   * record in `encodeSelfAddress`'s shape naming the address it answers from, then 8 zero bytes (44-byte
+   * payload). Measured on a T8354: 51 copies within about 300 ms, then CAM_ID.
+   */
+  CAM_ADDR: Buffer.from([0xf1, 0x43]),
   TURN_SERVER_CAM_ID: Buffer.from([0xf1, 0x84]),
   PING: Buffer.from([0xf1, 0xe0]),
   PONG: Buffer.from([0xf1, 0xe1]),
