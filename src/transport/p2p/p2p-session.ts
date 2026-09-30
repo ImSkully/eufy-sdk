@@ -359,7 +359,7 @@ export class P2PSession extends EventEmitter {
   private audioStalled = false;
   private audioRetransmitTimer?: ReturnType<typeof setInterval>;
   private lastPongData?: Buffer;
-  /** When the selected peer last sent P2P traffic on this connection; undefined until its first packet. */
+  /** When the selected peer last answered outbound P2P traffic on this connection. */
   private lastPeerAt?: number;
   /** Whether the silence has already been stated, so it is traced once per connection rather than per read. */
   private pathStaleTraced = false;
@@ -432,7 +432,7 @@ export class P2PSession extends EventEmitter {
   /**
    * How long this connection's path has been silent, or nothing where it has never answered.
    *
-   * PONG, PING, ACK and DATA from the selected peer prove the path is alive. `undefined` means no such packet
+   * PONG and ACK from the selected peer prove the path answers outbound traffic. `undefined` means no such reply
    * has arrived since connection, so silence alone does not establish a stale path.
    */
   get pathSilentMs(): number | undefined {
@@ -442,8 +442,8 @@ export class P2PSession extends EventEmitter {
   /**
    * Whether this path can still be committed to, on the evidence the heartbeat gives.
    *
-   * False where selected-peer traffic arrived and then stopped for {@link PATH_SILENCE_MS}. A connection with
-   * no post-connect peer traffic is not known to be dead, so it answers true.
+   * False where selected-peer replies arrived and then stopped for {@link PATH_SILENCE_MS}. A connection with
+   * no post-connect reply is not known to be dead, so it answers true.
    *
    * Traces the silence once per connection, on the read that first observes it.
    */
@@ -822,13 +822,7 @@ export class P2PSession extends EventEmitter {
     if (!socket) return;
     const fromConnectedPeer =
       this.connected && this.connectAddress?.host === rinfo.address && this.connectAddress.port === rinfo.port;
-    if (
-      fromConnectedPeer &&
-      (hasHeader(msg, ResponseMessageType.PONG) ||
-        hasHeader(msg, ResponseMessageType.PING) ||
-        hasHeader(msg, ResponseMessageType.ACK) ||
-        hasHeader(msg, ResponseMessageType.DATA))
-    ) {
+    if (fromConnectedPeer && (hasHeader(msg, ResponseMessageType.PONG) || hasHeader(msg, ResponseMessageType.ACK))) {
       this.lastPeerAt = Date.now();
       this.pathStaleTraced = false;
     }
