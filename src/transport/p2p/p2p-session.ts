@@ -867,6 +867,9 @@ export class P2PSession extends EventEmitter {
    * straddling a level-2 wait on a camera whose failure to deliver video had a separate cause, and did not
    * recur across later probes of it. Correlate an unmodelled type against a WORKING session before reading it
    * as a cause.
+   *
+   * CAM_ADDR is recognised and dropped: it names the address the device is already answering from, and the
+   * CAM_ID that follows it is what completes the connect.
    */
   private onMessage(msg: Buffer, rinfo: dgram.RemoteInfo, socket = this.socket): void {
     if (!socket) return;
@@ -897,7 +900,7 @@ export class P2PSession extends EventEmitter {
       this.onAck(msg);
     } else if (hasHeader(msg, ResponseMessageType.DATA)) {
       if (this.connected) this.onData(msg, { host: rinfo.address, port: rinfo.port });
-    } else {
+    } else if (!hasHeader(msg, ResponseMessageType.CAM_ADDR)) {
       this.logger.debug(`[p2p] ${this.cfg.stationSn} UNHANDLED payload hex: ${msg.toString("hex")}`);
     }
   }
