@@ -294,7 +294,9 @@ body in a log line:
 
 A candidate is attempted once: the same URL arriving again on a later push (one event is often several)
 is recognised as already attempted and not re-downloaded, for as long as it is inside the per-device
-window of recent URLs. The next event carries a new URL and a new attempt.
+window of recent URLs. The next event carries a new URL and a new attempt. The one exception is a 404: a
+push can arrive before its thumbnail is published, so a 404 is tried again after 2 s and then 4 s, and
+`reason` stays `pending` meanwhile. A newer candidate for the device replaces the retry.
 
 The cache is enabled by default. Constructing `EufyMega` with `{ storedSnapshotCache: false }` ignores
 candidates and omits `snapshotStored` from bound cameras. Retained bytes live only in the client process
