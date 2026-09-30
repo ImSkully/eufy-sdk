@@ -344,6 +344,60 @@ export interface P2PFrame extends P2PDataFrameHeader {
 /** Per-process counter behind {@link P2PSession.traceId} — see it for why this is not a serial. */
 let traceSequence = 0;
 
+/** How long a station's database reply has to arrive whole, when the caller states no bound. */
+const DB_TABLE_TIMEOUT_MS = 15_000;
+
+/**
+ * The rows of the first complete table document in an accumulated `CMD_DATABASE` reply.
+ *
+ * `undefined` while none has closed, which is what makes the document's own structure the completion
+ * signal: the frames carry no index, no total and no terminator, and the last one is padded past the
+ * closing brace so the accumulation is never valid JSON in its entirety.
+ *
+ * A closed object without a `data` array is not the table and is skipped rather than answered. The
+ * case is a tail left by an earlier reply that timed out: it begins mid-row, closes into a valid
+ * object carrying no rows, and reporting it would answer an empty table for a full one.
+ *
+ * Re-decoded UTF-8 first. `dbChunk` carries latin1, which preserves the bytes and mangles every name
+ * outside ASCII until the document is read back in the encoding it was written in.
+ */
+function firstTableRows(text: string): unknown[] | undefined {
+  const decoded = Buffer.from(text, "latin1").toString("utf8");
+  for (let start = decoded.indexOf("{"); start >= 0; start = decoded.indexOf("{", start + 1)) {
+    const end = closingBrace(decoded, start);
+    if (end < 0) return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(decoded.slice(start, end + 1));
+    } catch {
+      continue;
+    }
+    const data = (parsed as { data?: unknown } | null)?.data;
+    if (Array.isArray(data)) return data;
+  }
+  return undefined;
+}
+
+/** The index of the brace closing the object opened at `start`, or -1 while it has not arrived. */
+function closingBrace(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return i;
+  }
+  return -1;
+}
+
 /**
  * A live PPCS session. Internal transport; a host drives cameras through the capability surface.
  * @internal
@@ -1644,11 +1698,16 @@ export class P2PSession extends EventEmitter {
    * The HomeBase streams back `CMD_DATABASE` (1306) frames `{cmd:10000,count,data:[…]}`,
    * level-1-encrypted — decoded and emitted as `dbChunk` (decrypted text) per frame.
    * Tables: `familiar_faces`, `person_basic_info`, `event_person_list`, `history_record_info`.
+   *
+   * Throws while a {@link readDatabase} is accumulating: every table answers `{data:[…]}` and the
+   * frames tie no chunk to its request, so a second query's reply would be assembled into the first
+   * one's buffer and answered as its rows.
    */
   queryDatabase(
     table: string,
     opts: { accountId?: string; channel?: number; query?: Record<string, unknown>; innerCmd?: number } = {},
   ): void {
+    if (this.dbReadInFlight) throw new Error(`queryDatabase: ${this.cfg.stationSn} is already reading a table`);
     if (!this.connectAddress) throw new Error("not connected");
     // The eufy app issues this on mChannel 255 (the station channel), not 0.
     const channel = opts.channel ?? STATION_CHANNEL;
@@ -1715,6 +1774,56 @@ export class P2PSession extends EventEmitter {
       query: this.fullTableQuery(),
     });
   }
+
+  /**
+   * Query one on-station table and answer its rows, once the reply is whole.
+   *
+   * The request half of {@link queryDatabase} with its reply assembled: `CMD_DATABASE` arrives as
+   * several frames whose decrypted text is a fragment of one document, so the fragments are
+   * accumulated here and scanned after each one. Answers that document's `data` rows. Rejects when
+   * `signal` aborts, and when `timeoutMs` (default {@link DB_TABLE_TIMEOUT_MS}) elapses with no
+   * complete reply.
+   *
+   * One read at a time per session: while one is accumulating, every {@link queryDatabase} on the
+   * session throws, so a second reply cannot land in this buffer.
+   */
+  async readDatabase(
+    table: string,
+    opts: { accountId?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<unknown[]> {
+    if (opts.signal?.aborted) throw new Error("readDatabase: aborted");
+    this.queryDatabase(table, { accountId: opts.accountId, query: this.fullTableQuery() });
+    this.dbReadInFlight = true;
+    try {
+      return await new Promise<unknown[]>((resolve, reject) => {
+        let text = "";
+        const onChunk = (chunk: { text: string }): void => {
+          text += chunk.text;
+          const rows = firstTableRows(text);
+          if (rows) settle(() => resolve(rows));
+        };
+        const timer = setTimeout(
+          () => settle(() => reject(new Error(`readDatabase: ${this.cfg.stationSn} sent no complete ${table}`))),
+          opts.timeoutMs ?? DB_TABLE_TIMEOUT_MS,
+        );
+        const onAbort = (): void => settle(() => reject(new Error("readDatabase: aborted")));
+        const settle = (finish: () => void): void => {
+          clearTimeout(timer);
+          this.off("dbChunk", onChunk);
+          opts.signal?.removeEventListener("abort", onAbort);
+          finish();
+        };
+
+        this.on("dbChunk", onChunk);
+        opts.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    } finally {
+      this.dbReadInFlight = false;
+    }
+  }
+
+  /** Whether a {@link readDatabase} is accumulating; see {@link queryDatabase} for what it bars. */
+  private dbReadInFlight = false;
 
   /**
    * Request the **face feature rows** over P2P (`face_feature_info`, inner `cmd 10000`). Each row

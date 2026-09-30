@@ -85,6 +85,8 @@ import type {
   DeviceState,
   RealtimePlaneReadiness,
   RealtimeReadiness,
+  StationFace,
+  StationFacesOptions,
   WaitForRealtimeOptions,
 } from "./types.js";
 
@@ -96,6 +98,8 @@ export type {
   DeviceState,
   RealtimePlaneReadiness,
   RealtimeReadiness,
+  StationFace,
+  StationFacesOptions,
   WaitForRealtimeOptions,
 } from "./types.js";
 
@@ -113,6 +117,13 @@ function recordString(raw: Record<string, unknown>, key: string): string | undef
   const nested = (raw.deviceParams as Record<string, unknown> | undefined)?.[key];
   const v = typeof nested === "string" && nested ? nested : raw[key];
   return typeof v === "string" && v ? v : undefined;
+}
+
+/** The owning member's `admin_user_id` off a raw device record, which its station scopes writes to. */
+function adminUserIdFrom(raw: unknown): string | undefined {
+  const member = ((raw ?? {}) as Record<string, unknown>).member as Record<string, unknown> | undefined;
+  const id = member?.admin_user_id;
+  return typeof id === "string" && id ? id : undefined;
 }
 
 /**
@@ -363,12 +374,7 @@ export class EufyMega extends EventEmitter {
       onError: (e) => this.reportError(e),
       // The `a2` account id an `eufy_life` DP frame embeds — the owning member's `admin_user_id`,
       // falling back to the logged-in account's user id (the confirmed script path does the same).
-      resolveAccountId: (dev) => {
-        const member = ((dev.raw ?? {}) as Record<string, unknown>).member as Record<string, unknown> | undefined;
-        const adminId = member?.admin_user_id;
-        if (typeof adminId === "string" && adminId) return adminId;
-        return this.mega.auth?.userId ?? "";
-      },
+      resolveAccountId: (dev) => adminUserIdFrom(dev.raw) ?? this.mega.auth?.userId ?? "",
       // Fetch + parse a gallery effect from the HTTP catalogue into the serializable spec. The catalogue
       // lives in the http layer (transport/http/light-catalog); the mqtt router owns the frame bytes.
       resolvePreset: (presetId) => resolveLightEffectHttp(this.mega, presetId),
@@ -1871,6 +1877,38 @@ export class EufyMega extends EventEmitter {
    */
   getP2pSessions(): Map<string, P2PSession> {
     return this.p2p.getSessions();
+  }
+
+  /**
+   * The people enrolled on a station, read from its own `person_basic_info` table over P2P.
+   *
+   * The cloud roster (`api.getFaces()`) answers empty for an account that keeps its faces on the
+   * station, because they were never uploaded — the station holds them.
+   *
+   * Resolves with the rows the station returned. Rejects on a station that cannot be reached, on a
+   * record stating no `admin_user_id`, and on the reply not arriving whole in time. Assembling that
+   * reply is `P2PSession.readDatabase`'s; this resolves which station and which account id.
+   *
+   * `stranger<n>` names are the station's own placeholders for a face nobody has named, and are
+   * returned as they arrive; a caller that wants only named people filters them.
+   */
+  async getStationFaces(stationSn: string, opts: StationFacesOptions = {}): Promise<StationFace[]> {
+    if (!this.registry.list().length) await this.getDevices();
+    const station = this.p2p.stationKeyOf(stationSn);
+    const accountId = this.adminUserIdOf(station);
+    if (!accountId) throw new Error(`getStationFaces: no admin_user_id on record for ${station}`);
+
+    await this.p2p.ensureStation(station, opts.signal);
+    const session = this.p2p.getSessions().get(station);
+    if (!session) throw new Error(`getStationFaces: no P2P session for ${station}`);
+
+    const rows = await session.readDatabase("person_basic_info", { accountId, ...opts });
+    return rows.filter((row): row is StationFace => typeof row === "object" && row !== null);
+  }
+
+  /** The station's own `admin_user_id`, which its database refuses the query without. */
+  private adminUserIdOf(stationSn: string): string | undefined {
+    return adminUserIdFrom(this.registry.list().find((d) => d.sn === stationSn)?.raw);
   }
 
   /**
