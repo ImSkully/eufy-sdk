@@ -805,6 +805,7 @@ export class P2PSession extends EventEmitter {
       phase: "lookup-channels",
       local: !this.cfg.noBroadcast || this.cfg.localAddress !== undefined,
       cloud: this.cloudLookup !== undefined,
+      ...(this.cloudLookup ? {} : { cloudMissing: dskKey ? "cloud-addresses" : "dsk-key" }),
     });
     this.sendLookups();
     this.lookupTimer = setInterval(() => this.sendLookups(), LOOKUP_RETRY_MS);
