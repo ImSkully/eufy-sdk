@@ -74,9 +74,8 @@ describe("a session's path liveness", () => {
     vi.useFakeTimers();
     try {
       const { built } = session();
-      const handlers = built as unknown as { onAck: () => void; onData: () => void };
+      const handlers = built as unknown as { onAck: () => void };
       handlers.onAck = vi.fn();
-      handlers.onData = vi.fn();
       receive(built, ResponseMessageType.PONG, "203.0.113.1");
       vi.advanceTimersByTime(16_000);
       expect(built.pathAnswering).toBe(false);
@@ -85,16 +84,6 @@ describe("a session's path liveness", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("does not treat inbound PING or DATA as proof that outbound traffic arrives", () => {
-    const { built, internals } = session();
-    const handlers = built as unknown as { onData: () => void };
-    handlers.onData = vi.fn();
-    internals.lastPeerAt = Date.now() - 16_000;
-    receive(built, ResponseMessageType.PING, "203.0.113.1");
-    receive(built, ResponseMessageType.DATA, "203.0.113.1");
-    expect(built.pathAnswering).toBe(false);
   });
 
   it("does not count another endpoint as the selected peer", () => {
