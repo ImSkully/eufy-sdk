@@ -17,6 +17,8 @@ import { CameraDisabledError, type Command, type MediaProvider } from "../../cor
 export const CAMERA_CMD = {
   /** Camera on/off. switch is inverted: camera ON ⇒ 0, OFF ⇒ 1. */
   CAMERA_ENABLE: 1035,
+  /** Wrapped indoor camera power switch on HomeBase 3. */
+  PRIVACY_MODE: 6250,
   /**
    * Camera status LED on/off — the "power/recording" indicator. The
    * app JS has a sibling param `1056` (`APP_CMD_LIVEVIEW_LED_SWITCH`) for the SAME UI "Status Light"
@@ -346,7 +348,8 @@ export type CameraActions = Surface<typeof CAMERA_MEMBERS> & {
  * framing); this is the feature.
  *
  * ## Command variance (absorbed here)
- * - **on/off** = `CAMERA_SWITCH` (1035). This module owns only the *semantic* part — the value
+ * - **on/off** = `CAMERA_SWITCH` (1035), except the HomeBase 3 indoor firmware route below. This
+ *   module owns the *semantic* part — the value
  *   polarity, which is family-dependent (enable-bit ON ⇒ 1 for indoor cams + the 8422/8424
  *   floodlight-cams, disable-bit ON ⇒ 0 for battery/solo). The WIRE (level-1 int-string vs level-2
  *   direct-binary) is NOT decided here: it emits a `"auto"` scalar intent and the transport resolver
@@ -390,19 +393,38 @@ function powerValue(on: boolean, ctx: CommandContext): number {
 }
 
 /**
- * Camera power on/off: ONE wire for every family — `CMD_DEVS_SWITCH` (1035), the capability supplying the
- * param and the polarity-resolved value while `"auto"` lets the transport seal it per session.
- *
- * ✅ Confirmed against the current app's own frames. Across six cameras of four device types and both
- * topologies, every on/off the app sent was `1035` carrying the same body — `[u32 channel][u32 value]
- * [account_id]`, the channel selecting an attached camera — sealed at level-2 or level-1 exactly as the
- * session's key allowed. The capture contains no `6250` frame at all.
- *
- * No family is routed to the privacy envelope (6250). Beyond the app not using it, that envelope has no
- * level-1 form, so it cannot be sent at all on a session whose key negotiation concluded without a key —
- * and it is not the param this member reads, so a write there cannot be confirmed by a readback.
+ * Indoor cameras on a HomeBase 3 with firmware >= 2.3.1.0 use the wrapped privacy switch for power.
+ * Restores the route used by the older client on this topology; current-app wire confirmation is pending.
+ * Missing station or firmware evidence retains the scalar route. Mini and S350 cameras remain outside
+ * this correction because their separate privacy routes are not covered by the reported regression.
+ */
+function usesHomeBasePowerPayload(ctx: CommandContext): boolean {
+  if (
+    ctx.homeBaseAttached !== true ||
+    !ctx.stationSerial?.startsWith("T8030") ||
+    !isIndoorCamera(ctx) ||
+    isIndoorCamMini(ctx) ||
+    isIndoorPanTiltS350(ctx) ||
+    !ctx.firmwareVersion ||
+    !/^\d+(?:\.\d+){2,3}$/.test(ctx.firmwareVersion)
+  )
+    return false;
+  const version = ctx.firmwareVersion.split(".").map(Number);
+  const minimum = [2, 3, 1, 0];
+  for (let i = 0; i < minimum.length; i++) {
+    const difference = (version[i] ?? 0) - minimum[i];
+    if (difference !== 0) return difference > 0;
+  }
+  return true;
+}
+
+/**
+ * Camera power: a HomeBase 3 indoor camera uses the wrapped disable-bit switch when its firmware
+ * selects that route. Other cameras retain the captured 1035 scalar command and family polarity.
+ * The payload retains mValue3=0 and the camera channel; the transport injects the account identity.
  */
 function powerCommand(on: boolean, ctx: CommandContext): Command {
+  if (usesHomeBasePowerPayload(ctx)) return setPayload(CAMERA_CMD.PRIVACY_MODE, { switch: on ? 0 : 1 }, ctx, 0);
   return setScalar(CAMERA_CMD.CAMERA_ENABLE, powerValue(on, ctx), ctx, "auto");
 }
 
@@ -441,17 +463,15 @@ function poweredOf(ctx: CommandContext): "wired" | "battery" {
 /**
  * The param an enablement write will be reflected under on THIS device, and the raw value to expect there.
  *
- * Written wire and reported wire are not the same one. Every family is written on
+ * Written wire and reported wire are not necessarily the same one. Scalar power is written on
  * {@link CAMERA_CMD.CAMERA_ENABLE}, but the standalone indoor/outdoor cameras report their state under the
  * `2001` read alias and never the param that was written — measured on one account, 5 cameras report the
  * enablement param and never `2001`, 3 report `2001` and never the enablement param, and none reported both.
- * So the readback follows the reported param, chosen from the evidence the device gave, and each carries its
- * own convention: `2001` is direct, the enablement param takes the family polarity its write uses.
+ * So the readback follows the reported param, chosen from the evidence the device gave: `2001` is direct.
+ * Wrapped HomeBase power observes the disable-bit convention on the enablement param; the scalar route
+ * retains its family polarity. No read alias is inferred from the command envelope alone.
  *
- * `undefined` where no readback can confirm the write: a device that reported neither param has nothing to
- * read, and on the families whose power rides the privacy envelope the write lands on a wire the read never
- * observes — the disagreement that puts `enabled` in `unreflectedMembers`. Claiming observability there would
- * time out on every write instead of dispatching it.
+ * `undefined` where a device reported neither param and has no enablement readback.
  */
 function enablementReflection(
   on: boolean,
@@ -460,7 +480,11 @@ function enablementReflection(
   const alias = CAMERA_MEMBERS.enabled.readAliases[0].paramType;
   if (ctx.paramIds.has(alias)) return { param: alias, expected: on, observed: on };
   if (ctx.paramIds.has(CAMERA_CMD.CAMERA_ENABLE)) {
-    return { param: CAMERA_CMD.CAMERA_ENABLE, expected: powerValue(on, ctx), observed: on };
+    return {
+      param: CAMERA_CMD.CAMERA_ENABLE,
+      expected: usesHomeBasePowerPayload(ctx) ? (on ? 0 : 1) : powerValue(on, ctx),
+      observed: on,
+    };
   }
   return undefined;
 }
@@ -495,12 +519,12 @@ export const CAMERA_MEMBERS = {
    * 1035, standalone indoor/outdoor cams under 2001 OPEN_DEVICE with direct polarity, so 2001 is a
    * read-alias. Both verified live, and the write polarity is confirmed against the app's own frames.
    *
-   * The read and the setter observe the SAME wire on every family — see `powerCommand` — which is what
-   * makes this value track what it is told, and what lets `enablementReflection` confirm a write.
+   * The wrapped HomeBase 3 indoor firmware route writes a disable-bit switch on 6250; readback still
+   * follows a reported enablement param through `enablementReflection`, rather than assuming a new alias.
    *
    * The privacy param (6250) is reported by the outdoor-PT family and by no other camera measured, and both
    * of its polarities are observed. It is deliberately NOT aliased here: it moved in the same step as 1035, so
-   * the reading cannot say whether power and privacy are one state or two, and the app drives 1035 — so
+   * the reading cannot say whether power and privacy are one state or two — so
    * aliasing a second param could only fold two possible states into one getter for no gain.
    */
   enabled: {

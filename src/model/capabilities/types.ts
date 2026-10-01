@@ -274,6 +274,8 @@ export interface CommandContext extends AvailabilityContext {
   category?: string;
   /** Full device serial number, when known. */
   serial?: string;
+  /** Serial of the covering station, when the device record names one. */
+  stationSerial?: string;
   /** Display name, when known — sourced from the device record by the facade (for `info`). */
   name?: string;
   /**
