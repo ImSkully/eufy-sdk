@@ -5,6 +5,7 @@ import { DeviceType } from "../../device-types.js";
 import { Device } from "../../device.js";
 import type { CommandContext } from "../types.js";
 import { bind } from "./bind.js";
+import { commandObservation } from "../../../core/contracts.js";
 
 const context = (extra: Partial<CommandContext> = {}): CommandContext => ({
   codec: "camera",
@@ -38,6 +39,11 @@ describe("indoor camera power on HomeBase 3", () => {
     await acts.off();
     expect(sent.map((command) => command.kind)).toEqual(["set-payload", "set-payload", "set-payload"]);
     expect(sent).toMatchObject([{ payload: { switch: 1 } }, { payload: { switch: 0 } }, { payload: { switch: 1 } }]);
+    expect(sent.map(commandObservation)).toMatchObject([
+      { expected: 0, observed: false },
+      { expected: 1, observed: true },
+      { expected: 0, observed: false },
+    ]);
   });
 
   it.each(["2.3.1", "2.3.1.1", "2.3.10.0", "2.4.0.0", "3.0.0.0"])("accepts firmware %s", (firmwareVersion) => {
@@ -68,20 +74,93 @@ describe("indoor camera power on HomeBase 3", () => {
     expect(buildCommand("enabled", false, context(extra))).toMatchObject({ kind: "set-param" });
   });
 
-  it.each([true, false])("confirms enabled=%s using the reported disable bit", (enabled) => {
-    expect(CAMERA_MEMBERS.enabled.observation.reflects(enabled, context())).toEqual({
-      param: CAMERA_CMD.CAMERA_ENABLE,
-      expected: enabled ? 0 : 1,
-      observed: enabled,
-    });
+  it.each([true, false])(
+    "confirms enabled=%s using the reported enable bit, separately from the privacy switch",
+    (enabled) => {
+      expect(CAMERA_MEMBERS.enabled.observation.reflects(enabled, context())).toEqual({
+        param: CAMERA_CMD.CAMERA_ENABLE,
+        expected: enabled ? 1 : 0,
+        observed: enabled,
+      });
+      const device = Device.fromRecord("T8410P0000000000", {
+        deviceType: DeviceType.INDOOR_PT_CAMERA,
+        model: "T8410",
+        category: "eufy_security",
+        parentSn: "T8030P0000000000",
+        params: { [CAMERA_CMD.CAMERA_ENABLE]: enabled ? "1" : "0" },
+      });
+      expect(device.getProperty("enabled")?.value).toBe(enabled);
+      device.bindActions(context(), { dispatch: async () => {} });
+      expect(device.camera?.()?.enabled).toBe(enabled);
+    },
+  );
+
+  it.each(["0", "1", "false", "true"])("decodes raw 1035=%s on the affected topology", (raw) => {
     const device = Device.fromRecord("T8410P0000000000", {
       deviceType: DeviceType.INDOOR_PT_CAMERA,
       model: "T8410",
       category: "eufy_security",
       parentSn: "T8030P0000000000",
-      params: { [CAMERA_CMD.CAMERA_ENABLE]: enabled ? "0" : "1" },
+      params: { 1035: raw },
     });
-    expect(device.getProperty("enabled")?.value).toBe(enabled);
+    expect(device.getProperty("enabled")?.value).toBe(raw === "1" || raw === "true");
+    device.applyParams({ 1035: raw === "1" || raw === "true" ? "0" : "1" });
+    expect(device.getProperty("enabled")?.value).toBe(raw === "0" || raw === "false");
+  });
+
+  it.each([
+    { model: "T8410", parentSn: undefined },
+    { model: "T8410", parentSn: "T8010P0000000000" },
+    { model: "T8114", parentSn: "T8030P0000000000" },
+    { model: "T8425", parentSn: "T8030P0000000000" },
+    { model: "T8415", parentSn: "T8030P0000000000" },
+  ])("retains the default read polarity outside T8410/HomeBase 3 %j", (extra) => {
+    const device = Device.fromRecord("SN", {
+      deviceType: DeviceType.INDOOR_PT_CAMERA,
+      category: "eufy_security",
+      params: { 1035: "0" },
+      ...extra,
+    });
+    expect(device.getProperty("enabled")?.value).toBe(true);
+  });
+
+  it("adopts the corrected polarity when the covering station arrives on a later record", () => {
+    const record = {
+      deviceType: DeviceType.INDOOR_PT_CAMERA,
+      model: "T8410",
+      category: "eufy_security",
+      params: { 1035: "1" },
+    };
+    const device = Device.fromRecord("T8410P0000000000", record);
+    expect(device.getProperty("enabled")?.value).toBe(false);
+    const attached = { ...record, parentSn: "T8030P0000000000" };
+    expect(device.reresolve(attached)).toEqual([]);
+    device.applyParams(attached.params);
+    expect(device.getProperty("enabled")?.value).toBe(true);
+  });
+
+  it.each([true, false])("keeps attached polarity when a partial record restates the model=%s", (restatesModel) => {
+    const record = {
+      deviceType: DeviceType.INDOOR_PT_CAMERA,
+      model: "T8410",
+      category: "eufy_security",
+      parentSn: "T8030P0000000000",
+      params: { 1035: "1" },
+    };
+    const device = Device.fromRecord("T8410P0000000000", record);
+    device.bindActions(context(), { dispatch: async () => {} });
+    const properties = device.properties;
+    const partial = {
+      deviceType: record.deviceType,
+      model: restatesModel ? record.model : undefined,
+      params: record.params,
+    };
+    device.reresolve(partial);
+    device.applyParams(partial.params);
+    expect(device.stationSn).toBe(record.parentSn);
+    expect(device.properties).toBe(properties);
+    expect(device.getProperty("enabled")?.value).toBe(true);
+    expect(device.camera?.()?.enabled).toBe(true);
   });
 
   it("keeps the direct OPEN_DEVICE readback when reported", () => {

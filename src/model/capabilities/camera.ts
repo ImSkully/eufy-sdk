@@ -4,8 +4,16 @@ import { isIndoorCamera, isIndoorCamMini, isIndoorPanTiltS350 } from "../device-
 import { setScalar, setPayload, setJson, hasCapability } from "./access.js";
 import { AUDIO_CMD } from "./audio.js";
 import { cameraPowerTier } from "./battery.js";
-import { accepts, propertiesOf, provided, type Members, type Surface, type MemberDeps } from "./members.js";
-import type { CapabilityModule, CapabilityActions, CommandContext } from "./types.js";
+import {
+  accepts,
+  memberWrite,
+  propertiesOf,
+  provided,
+  type Members,
+  type Surface,
+  type MemberDeps,
+} from "./members.js";
+import type { AvailabilityContext, CapabilityModule, CapabilityActions, CommandContext } from "./types.js";
 import { CameraDisabledError, type Command, type MediaProvider } from "../../core/contracts.js";
 
 /**
@@ -15,7 +23,7 @@ import { CameraDisabledError, type Command, type MediaProvider } from "../../cor
  * `transport/p2p/commands.ts`). Each entry notes its app `CommandType` name.
  */
 export const CAMERA_CMD = {
-  /** Camera on/off. switch is inverted: camera ON ⇒ 0, OFF ⇒ 1. */
+  /** Camera on/off. Read and write polarity depend on the family and topology. */
   CAMERA_ENABLE: 1035,
   /** Wrapped indoor camera power switch on HomeBase 3. */
   PRIVACY_MODE: 6250,
@@ -392,6 +400,11 @@ function powerValue(on: boolean, ctx: CommandContext): number {
   return isEnableBitPolarity(ctx) ? (on ? 1 : 0) : on ? 0 : 1;
 }
 
+/** T8410 reports an enable bit on HomeBase 3; its wrapped command carries a disable bit. */
+function isT8410HomeBase3(ctx: AvailabilityContext): boolean {
+  return ctx.model === "T8410" && ctx.stationSerial?.startsWith("T8030") === true;
+}
+
 /**
  * Indoor cameras on a HomeBase 3 with firmware >= 2.3.1.0 use the wrapped privacy switch for power.
  * Restores the route used by the older client on this topology; current-app wire confirmation is pending.
@@ -468,8 +481,8 @@ function poweredOf(ctx: CommandContext): "wired" | "battery" {
  * `2001` read alias and never the param that was written — measured on one account, 5 cameras report the
  * enablement param and never `2001`, 3 report `2001` and never the enablement param, and none reported both.
  * So the readback follows the reported param, chosen from the evidence the device gave: `2001` is direct.
- * Wrapped HomeBase power observes the disable-bit convention on the enablement param; the scalar route
- * retains its family polarity. No read alias is inferred from the command envelope alone.
+ * A T8410 on HomeBase 3 reports an enable bit even though the wrapped command sends a disable bit.
+ * Other wrapped cameras retain their existing read polarity. No read alias is inferred from the envelope.
  *
  * `undefined` where a device reported neither param and has no enablement readback.
  */
@@ -482,7 +495,15 @@ function enablementReflection(
   if (ctx.paramIds.has(CAMERA_CMD.CAMERA_ENABLE)) {
     return {
       param: CAMERA_CMD.CAMERA_ENABLE,
-      expected: usesHomeBasePowerPayload(ctx) ? (on ? 0 : 1) : powerValue(on, ctx),
+      expected: isT8410HomeBase3(ctx)
+        ? on
+          ? 1
+          : 0
+        : usesHomeBasePowerPayload(ctx)
+          ? on
+            ? 0
+            : 1
+          : powerValue(on, ctx),
       observed: on,
     };
   }
@@ -514,13 +535,14 @@ function refuseWhenDisabled(ctx: CommandContext, read: (name: string) => { value
  */
 export const CAMERA_MEMBERS = {
   /**
-   * The READ is the *disable*-bit convention (1035 "0" ⇒ ON, 2001 direct); the WRITE polarity is
+   * The default READ is the *disable*-bit convention (1035 "0" ⇒ ON, 2001 direct); the WRITE polarity is
    * family-dependent — see `powerValue` / `isEnableBitPolarity`. Battery/solo cams report the state under
    * 1035, standalone indoor/outdoor cams under 2001 OPEN_DEVICE with direct polarity, so 2001 is a
    * read-alias. Both verified live, and the write polarity is confirmed against the app's own frames.
    *
-   * The wrapped HomeBase 3 indoor firmware route writes a disable-bit switch on 6250; readback still
-   * follows a reported enablement param through `enablementReflection`, rather than assuming a new alias.
+   * T8410 on HomeBase 3 reports 1035 as an enable bit ("1" ⇒ ON), as identified by the user's
+   * reversed-state report and numeric runtime params. Its 6250 command still writes a disable bit.
+   * Readback follows that reported polarity, independently of the command payload.
    *
    * The privacy param (6250) is reported by the outdoor-PT family and by no other camera measured, and both
    * of its polarities are observed. It is deliberately NOT aliased here: it moved in the same step as 1035, so
@@ -533,10 +555,11 @@ export const CAMERA_MEMBERS = {
     kind: "boolean",
     provenance: "verified",
     invert: true,
+    invertFor: (ctx) => (isT8410HomeBase3(ctx) ? false : undefined),
     readAliases: [{ paramType: 2001, invert: false }],
     description:
-      "Camera enabled. Family-dependent wire param: 1035 CMD_DEVS_SWITCH (disable bit, battery/" +
-      "solo cams) or 2001 OPEN_DEVICE (standalone indoor/outdoor). Reliable on/off status source " +
+      "Camera enabled. Family-dependent wire param: 1035 CMD_DEVS_SWITCH (enable bit on T8410/HomeBase 3, " +
+      "disable bit on battery/solo cams) or 2001 OPEN_DEVICE (standalone indoor/outdoor). Reliable on/off status source " +
       "(a live-stream probe is not).",
     observation: {
       event: "cameraEnabledChanged",
@@ -913,8 +936,8 @@ export const CAMERA: CapabilityModule = {
   /** Only the no-argument power verbs, which carry no value for a member to hold. */
   actions({ ctx, sink }: MemberDeps): CapabilityActions {
     return {
-      on: () => sink.dispatch(powerCommand(true, ctx)),
-      off: () => sink.dispatch(powerCommand(false, ctx)),
+      on: () => sink.dispatch(memberWrite("enabled", CAMERA_MEMBERS.enabled, true, ctx)),
+      off: () => sink.dispatch(memberWrite("enabled", CAMERA_MEMBERS.enabled, false, ctx)),
     };
   },
 };
