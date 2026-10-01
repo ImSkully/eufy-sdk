@@ -2094,6 +2094,18 @@ export class EufyMega extends EventEmitter {
       (resolved.codec === "vacuum" || resolved.codec === "mower") && rec.model
         ? await this.fetchDpCatalog(rec.model)
         : undefined;
+    if (rec.model === "T8410") {
+      const booleanParam = (id: number): string | undefined => {
+        const value = rec.params[id];
+        return value === undefined || ["0", "1", "true", "false"].includes(value) ? value : "<non-boolean>";
+      };
+      this.opts.logger?.info(
+        `[context] T8410 power-v2 type=${rec.deviceType ?? "unknown"} channel=${channel}` +
+          ` stationModel=${rec.parentSn?.slice(0, 5) ?? "standalone"}` +
+          ` firmware=${recordString(raw, "main_sw_version") ?? "unknown"}` +
+          ` reported1035=${booleanParam(1035) ?? "absent"} reported2001=${booleanParam(2001) ?? "absent"}`,
+      );
+    }
     return {
       channel,
       codec: resolved.codec,
@@ -2101,7 +2113,7 @@ export class EufyMega extends EventEmitter {
       model: rec.model,
       category: dev.category,
       serial: sn,
-      stationSerial: typeof raw.parent_sn === "string" ? raw.parent_sn : undefined,
+      stationSerial: rec.parentSn,
       // Identity metadata for `info`, for a host's device-registry surface. `name` = the app-shown
       // device_name (registry's `name`), not the resolved codec/inferred name. firmware/hardware come
       // straight off the device record: `main_sw_version` / `main_hw_version` — the same fields the v6
@@ -2121,8 +2133,8 @@ export class EufyMega extends EventEmitter {
       // The same claim the command sink routes on — a capability gates its P2P-only variants (e.g.
       // setRainMode) on this. Keyed on the P2P stack's own predicate (a usable `p2p_did` endpoint).
       hasP2p: P2PCommandRouter.claimsDevice(dev),
-      // Topology as the record states it: a parent that isn't the device itself means HomeBase-attached.
-      homeBaseAttached: !!raw.parent_sn && raw.parent_sn !== dev.sn,
+      // Use the same resolved topology as the registry and the P2P command router.
+      homeBaseAttached: !!rec.parentSn && rec.parentSn !== sn,
       dpCatalog,
     };
   }
