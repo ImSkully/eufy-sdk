@@ -14,14 +14,14 @@
  * video, other frames: the same 22B header (u32@0 = len · u16@6 = frame number · u48@0x0e = stamp in ms),
  *   then len bytes of plaintext H.264
  * audio: 16B header (u32@0 = len · u8@5 = codec, 0 = AAC-LC), then 16B GCM tag, 12B GCM nonce and len
- *   bytes of AES-256-GCM raw AAC under the media key of the preceding keyframe, AAD as live video
+ *   bytes of AES-256-GCM AAC under the media key of the preceding keyframe, AAD as live video; the
+ *   plaintext is a whole ADTS frame, header included
  * ```
  *
  * @module p2p/recording-download
  */
 import { createDecipheriv } from "node:crypto";
 import { RecordingDownloadError, type RecordingDownload } from "../../core/contracts.js";
-import { buildAdtsHeader } from "./adts.js";
 import { CommandType } from "./commands.js";
 import type { P2PFrame, P2PSession } from "./p2p-session.js";
 import { VIDEO_GCM_AAD, VideoFrameDecoder, parseVideoFrameHeader } from "./video.js";
@@ -237,7 +237,7 @@ export function decodeRecording(frames: readonly RecordingFrame[], eccPrivateKey
         raw.subarray(AUDIO_HEADER_LEN, AUDIO_NONCE_START),
         raw.subarray(AUDIO_BODY_START, AUDIO_BODY_START + len),
       );
-      if (aac?.length) audio.push(buildAdtsHeader(aac.length), aac);
+      if (aac?.length) audio.push(aac);
     }
   }
   if (!video.length) throw new RecordingDownloadError("undecodable", "no video frame of the recording decoded");
