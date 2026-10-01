@@ -5,7 +5,7 @@
  * ({@link buildStringPairCommandPayload}) on the camera's channel. The station answers on
  * {@link RECORDING_DATA_TYPE}, tagged with that channel, with the recording's `CMD_VIDEO_FRAME` (1300) and
  * `CMD_AUDIO_FRAME` (1301) frames, faster than real time, then `CMD_DOWNLOAD_FINISH` (1304) on the control
- * data type, with the same channel.
+ * data type, tagged with channel 0 whatever the camera's channel.
  *
  * Frame layouts:
  *
@@ -38,6 +38,8 @@ const AUDIO_NONCE_START = 32;
 const AUDIO_BODY_START = 44;
 /** Audio codec id for AAC-LC in the audio frame header. */
 const AUDIO_CODEC_AAC_LC = 0;
+/** Channel 0, the one a HomeBase tags `CMD_DOWNLOAD_FINISH` with whatever the camera's channel. */
+const FINISH_CHANNEL = 0;
 /** How long the station may take to send the first frame of a recording. */
 const FIRST_FRAME_WAIT_MS = 20_000;
 /**
@@ -84,7 +86,7 @@ export interface RecordingTransfer {
 /**
  * Request one recording and collect its frames until `CMD_DOWNLOAD_FINISH`. Only frames on
  * {@link RECORDING_DATA_TYPE} tagged with the camera's channel belong to it, so a live stream open on the same
- * station is never mixed in.
+ * station is never mixed in. The finish frame is taken on the camera's channel or channel 0.
  *
  * `frames` rejects with {@link RecordingDownloadError}: `no-data` when nothing arrives within
  * {@link FIRST_FRAME_WAIT_MS}, and `incomplete` when the transfer ends without its finish frame, on a
@@ -134,12 +136,13 @@ export function receiveRecording(
     collected = [];
   };
   const onData = (frame: P2PFrame) => {
-    if (frame.channel !== request.channel) return;
     if (frame.commandId === CommandType.CMD_DOWNLOAD_FINISH) {
+      if (frame.channel !== request.channel && frame.channel !== FINISH_CHANNEL) return;
       if (draining) incomplete(draining);
       else deliver();
       return stop();
     }
+    if (frame.channel !== request.channel) return;
     if (frame.commandId !== CommandType.CMD_VIDEO_FRAME && frame.commandId !== CommandType.CMD_AUDIO_FRAME) return;
     if (frame.dataType !== RECORDING_DATA_TYPE) return;
     received = true;

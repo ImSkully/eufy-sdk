@@ -148,6 +148,25 @@ describe("recording download", () => {
       expect(session.listenerCount("data")).toBe(0);
     });
 
+    it("ends on the finish frame tagged with channel 0, for a camera on channel 1", async () => {
+      vi.useFakeTimers();
+      const session = station((s) => {
+        s.emit("data", frame(1300, { channel: 1 }));
+        s.emit("data", frame(1301, { channel: 1 }));
+        s.emit("data", frame(1304, { channel: 0, dataType: 2 }));
+      });
+
+      const transfer = receiveRecording(session as unknown as P2PSession, { ...request, channel: 1 });
+      const outcome = transfer.frames.then(
+        (frames) => frames.map((f) => f.commandId),
+        (error: { reason?: string }) => error.reason,
+      );
+      await vi.advanceTimersByTimeAsync(16_000);
+
+      expect(await outcome).toEqual([1300, 1301]);
+      expect(session.listenerCount("data")).toBe(0);
+    });
+
     it("answers no-data when the station sends nothing", async () => {
       vi.useFakeTimers();
       const session = station(() => undefined);
