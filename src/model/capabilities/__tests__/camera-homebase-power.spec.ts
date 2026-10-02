@@ -5,7 +5,8 @@ import { DeviceType } from "../../device-types.js";
 import { Device } from "../../device.js";
 import type { CommandContext } from "../types.js";
 import { bind } from "./bind.js";
-import { commandObservation } from "../../../core/contracts.js";
+import { CameraDisabledError, commandObservation, type MediaProvider } from "../../../core/contracts.js";
+import { unreflectedMembers } from "../members.js";
 
 const context = (extra: Partial<CommandContext> = {}): CommandContext => ({
   codec: "camera",
@@ -39,11 +40,8 @@ describe("indoor camera power on HomeBase 3", () => {
     await acts.off();
     expect(sent.map((command) => command.kind)).toEqual(["set-payload", "set-payload", "set-payload"]);
     expect(sent).toMatchObject([{ payload: { switch: 1 } }, { payload: { switch: 0 } }, { payload: { switch: 1 } }]);
-    expect(sent.map(commandObservation)).toMatchObject([
-      { expected: 0, observed: false },
-      { expected: 1, observed: true },
-      { expected: 0, observed: false },
-    ]);
+    expect(sent.map(commandObservation)).toEqual([undefined, undefined, undefined]);
+    expect(unreflectedMembers(acts)).toEqual(["enabled"]);
   });
 
   it.each(["2.3.1", "2.3.1.1", "2.3.10.0", "2.4.0.0", "3.0.0.0"])("accepts firmware %s", (firmwareVersion) => {
@@ -75,13 +73,9 @@ describe("indoor camera power on HomeBase 3", () => {
   });
 
   it.each([true, false])(
-    "confirms enabled=%s using the reported enable bit, separately from the privacy switch",
+    "retains the startup enabled=%s reading without treating it as privacy-write confirmation",
     (enabled) => {
-      expect(CAMERA_MEMBERS.enabled.observation.reflects(enabled, context())).toEqual({
-        param: CAMERA_CMD.CAMERA_ENABLE,
-        expected: enabled ? 1 : 0,
-        observed: enabled,
-      });
+      expect(CAMERA_MEMBERS.enabled.observation.reflects(enabled, context())).toBeUndefined();
       const device = Device.fromRecord("T8410P0000000000", {
         deviceType: DeviceType.INDOOR_PT_CAMERA,
         model: "T8410",
@@ -170,6 +164,32 @@ describe("indoor camera power on HomeBase 3", () => {
       expected: false,
       observed: false,
     });
+    const { acts } = bind<CameraActions>("camera", ctx);
+    expect(unreflectedMembers(acts)).toEqual([]);
+  });
+
+  it("keeps scalar-route write confirmation and trusted reads", () => {
+    const ctx = context({ firmwareVersion: "2.2.9.0" });
+    expect(CAMERA_MEMBERS.enabled.observation.reflects(true, ctx)).toEqual({
+      param: 1035,
+      expected: 1,
+      observed: true,
+    });
+    const { acts } = bind<CameraActions>("camera", ctx);
+    expect(unreflectedMembers(acts)).toEqual([]);
+  });
+
+  it("does not refuse a live pull based on the unreflected power bit", async () => {
+    const media: MediaProvider = {
+      snapshotLive: async () => ({ jpeg: Buffer.from("jpeg"), width: 1, height: 1 }),
+      live: async () => ({}) as never,
+      record: async () => Buffer.alloc(0),
+    };
+    const read = () => ({ value: false });
+    const unreflected = bind<CameraActions>("camera", context(), { media, read }).acts;
+    expect((await unreflected.snapshotLive!()).jpeg).toEqual(Buffer.from("jpeg"));
+    const reflected = bind<CameraActions>("camera", context({ firmwareVersion: "2.2.9.0" }), { media, read }).acts;
+    await expect(reflected.snapshotLive!()).rejects.toBeInstanceOf(CameraDisabledError);
   });
 
   it("does not invent an enablement readback from a privacy-only report", () => {

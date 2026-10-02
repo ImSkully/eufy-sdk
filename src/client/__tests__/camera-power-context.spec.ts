@@ -43,14 +43,14 @@ describe("camera power context", () => {
         channel: 3,
       });
       expect(info).toHaveBeenCalledWith(
-        "[context] T8410 power-v3 type=31 channel=3 stationModel=T8030 firmware=2.3.1.0 reported1035=0 reported2001=absent",
+        "[context] T8410 power-v4 type=31 channel=3 stationModel=T8030 firmware=2.3.1.0 reported1035=0 reported2001=absent",
       );
       expect(info.mock.calls.flat().join(" ")).not.toContain(sn);
       expect(info.mock.calls.flat().join(" ")).not.toContain(stationSn);
     },
   );
 
-  it.each([true, false])("waits for the changed enable-bit report after requesting enabled=%s", async (enabled) => {
+  it.each([true, false])("retains scalar-route confirmation after requesting enabled=%s", async (enabled) => {
     const client = new EufyMega({ email: "t@example.com", password: "x" });
     const internal = client as any;
     const sn = "T8410P0000000000";
@@ -75,11 +75,11 @@ describe("camera power context", () => {
       channel: 3,
       homeBaseAttached: true,
       stationSerial: record.parentSn,
-      firmwareVersion: "2.3.2.4",
+      firmwareVersion: "2.2.9.0",
       paramIds: new Set([1035]),
       capabilities: new Set(["camera"]),
     });
-    expect(cmd).toMatchObject({ kind: "set-payload", payload: { switch: enabled ? 0 : 1 } });
+    expect(cmd).toMatchObject({ kind: "set-param", param: 1035, value: enabled ? 1 : 0 });
     const observation = commandObservation(cmd!);
     expect(observation).toMatchObject({ param: 1035, expected: enabled ? 1 : 0, observed: enabled });
     expect(await internal.refreshEventState(sn, observation)).toBe(true);
@@ -145,12 +145,37 @@ describe("camera power context", () => {
       { kind: "set-payload", payload: { switch: 0 } },
       { kind: "set-payload", payload: { switch: 1 } },
     ]);
-    expect(sent.map(commandObservation)).toMatchObject([
-      { expected: 1, observed: true },
-      { expected: 1, observed: true },
-      { expected: 0, observed: false },
-    ]);
+    expect(sent.map(commandObservation)).toEqual([undefined, undefined, undefined]);
     await internal.pollOnce();
     expect(bindSink).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([true, false])("does not poll stale 1035 to confirm a wrapped enabled=%s write", async (enabled) => {
+    const client = new EufyMega({ email: "t@example.com", password: "x" });
+    const internal = client as any;
+    vi.spyOn(internal, "commandContext").mockResolvedValue({
+      codec: "camera",
+      model: "T8410",
+      deviceType: 31,
+      channel: 3,
+      stationSerial: "T8030P0000000000",
+      homeBaseAttached: true,
+      firmwareVersion: "2.3.2.4",
+      paramIds: new Set([1035]),
+      capabilities: new Set(["camera"]),
+    });
+    const route = vi.spyOn(internal, "routeCommand").mockResolvedValue(undefined);
+    const refresh = vi.spyOn(internal.registry, "refreshedList");
+    await client.setProperty("T8410P0000000000", "enabled", enabled);
+    expect(route).toHaveBeenCalledWith(
+      "T8410P0000000000",
+      expect.objectContaining({
+        kind: "set-payload",
+        cmd: 6250,
+        payload: { switch: enabled ? 0 : 1 },
+      }),
+    );
+    expect(refresh).not.toHaveBeenCalled();
+    expect(internal.commandRefreshes.size).toBe(0);
   });
 });

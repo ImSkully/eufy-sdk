@@ -431,6 +431,11 @@ function usesHomeBasePowerPayload(ctx: CommandContext): boolean {
   return true;
 }
 
+/** The T8410 privacy write does not reliably move its startup enablement report on HomeBase 3. */
+function hasUnreflectedHomeBasePower(ctx: CommandContext): boolean {
+  return isT8410HomeBase3(ctx) && usesHomeBasePowerPayload(ctx) && !ctx.paramIds.has(2001);
+}
+
 /**
  * Camera power: a HomeBase 3 indoor camera uses the wrapped disable-bit switch when its firmware
  * selects that route. Other cameras retain the captured 1035 scalar command and family polarity.
@@ -481,8 +486,8 @@ function poweredOf(ctx: CommandContext): "wired" | "battery" {
  * `2001` read alias and never the param that was written — measured on one account, 5 cameras report the
  * enablement param and never `2001`, 3 report `2001` and never the enablement param, and none reported both.
  * So the readback follows the reported param, chosen from the evidence the device gave: `2001` is direct.
- * A T8410 on HomeBase 3 reports an enable bit even though the wrapped command sends a disable bit.
- * Other wrapped cameras retain their existing read polarity. No read alias is inferred from the envelope.
+ * T8410/HomeBase 3 retains a useful startup enable bit, but it does not reliably reflect the privacy write.
+ * Do not poll that bit to confirm the wrapped command. Other routes retain their existing readback.
  *
  * `undefined` where a device reported neither param and has no enablement readback.
  */
@@ -492,6 +497,7 @@ function enablementReflection(
 ): { param: number; expected: boolean | number; observed: boolean } | undefined {
   const alias = CAMERA_MEMBERS.enabled.readAliases[0].paramType;
   if (ctx.paramIds.has(alias)) return { param: alias, expected: on, observed: on };
+  if (hasUnreflectedHomeBasePower(ctx)) return undefined;
   if (ctx.paramIds.has(CAMERA_CMD.CAMERA_ENABLE)) {
     return {
       param: CAMERA_CMD.CAMERA_ENABLE,
@@ -511,12 +517,13 @@ function enablementReflection(
 }
 
 /**
- * Refuse a media pull where the `enabled` reading is false.
+ * Refuse a media pull where a reliable `enabled` reading is false.
  *
  * `undefined` is permissive: a camera that never reported its state is not a camera known to be off.
  */
 function refuseWhenDisabled(ctx: CommandContext, read: (name: string) => { value: unknown } | undefined): void {
-  if (read("enabled")?.value === false) throw new CameraDisabledError(ctx.name ?? ctx.serial);
+  if (!hasUnreflectedHomeBasePower(ctx) && read("enabled")?.value === false)
+    throw new CameraDisabledError(ctx.name ?? ctx.serial);
 }
 
 /**
@@ -542,7 +549,8 @@ export const CAMERA_MEMBERS = {
    *
    * T8410 on HomeBase 3 reports 1035 as an enable bit ("1" ⇒ ON), as identified by the user's
    * reversed-state report and numeric runtime params. Its 6250 command still writes a disable bit.
-   * Readback follows that reported polarity, independently of the command payload.
+   * The startup reading remains available, but runtime reports show it does not reliably reflect that
+   * privacy write. `readReflectsWrite` states this distinction to the caller.
    *
    * The privacy param (6250) is reported by the outdoor-PT family and by no other camera measured, and both
    * of its polarities are observed. It is deliberately NOT aliased here: it moved in the same step as 1035, so
@@ -557,10 +565,11 @@ export const CAMERA_MEMBERS = {
     invert: true,
     invertFor: (ctx) => (isT8410HomeBase3(ctx) ? false : undefined),
     readAliases: [{ paramType: 2001, invert: false }],
+    readReflectsWrite: (ctx) => !hasUnreflectedHomeBasePower(ctx),
     description:
       "Camera enabled. Family-dependent wire param: 1035 CMD_DEVS_SWITCH (enable bit on T8410/HomeBase 3, " +
-      "disable bit on battery/solo cams) or 2001 OPEN_DEVICE (standalone indoor/outdoor). Reliable on/off status source " +
-      "(a live-stream probe is not).",
+      "disable bit on battery/solo cams) or 2001 OPEN_DEVICE (standalone indoor/outdoor). Reported on/off state; " +
+      "unreflectedMembers identifies commands whose effect this report does not reliably reflect.",
     observation: {
       event: "cameraEnabledChanged",
       reflects: (value, ctx) => enablementReflection(asBool(value), ctx),
@@ -836,7 +845,7 @@ export const CAMERA_MEMBERS = {
    * value, and it exists only on a device bound to a provider. Each is declared once, with its
    * signature taken FROM {@link MediaProvider} — so a change there is a compile error here, not a drift.
    *
-   * Every pull is refused where {@link CAMERA_MEMBERS.enabled} reads false, with {@link CameraDisabledError} —
+   * Every pull is refused where a reliable {@link CAMERA_MEMBERS.enabled} reads false, with {@link CameraDisabledError} —
    * `live`, `snapshotLive`, `record`, `openReadable` and `recordFragments` alike, since each opens media on a
    * camera that serves none. That reading is the on/off source; a live probe is not one, since a disabled
    * camera answers a start with audio and never a video frame.

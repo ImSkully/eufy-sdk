@@ -2108,7 +2108,7 @@ export class EufyMega extends EventEmitter {
         return value === undefined || ["0", "1", "true", "false"].includes(value) ? value : "<non-boolean>";
       };
       this.opts.logger?.info(
-        `[context] T8410 power-v3 type=${rec.deviceType ?? "unknown"} channel=${channel}` +
+        `[context] T8410 power-v4 type=${rec.deviceType ?? "unknown"} channel=${channel}` +
           ` stationModel=${rec.parentSn?.slice(0, 5) ?? "standalone"}` +
           ` firmware=${recordString(raw, "main_sw_version") ?? "unknown"}` +
           ` reported1035=${booleanParam(1035) ?? "absent"} reported2001=${booleanParam(2001) ?? "absent"}`,
