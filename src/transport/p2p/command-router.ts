@@ -1426,9 +1426,7 @@ export class P2PCommandRouter {
    * A session whose {@link P2PSession.pathAnswering} is false is closed and re-resolved before it is handed
    * over: the station answers every heartbeat, so a path silent past several of them is gone. A session
    * reporting nothing about its path is not reporting that evidence and is handed over as it is. Cached live
-   * sources on the replaced session are discarded before closing it: their held sessions still point to
-   * the old connection, so returning one would send media starts to that closed path. Sources on independent
-   * media sessions remain attached.
+   * sources on the replaced session are discarded before closing it (see {@link tearDownStation}).
    * Replaced at most once per resolution, so a station whose replacement is silent too is returned rather
    * than closed again.
    */
