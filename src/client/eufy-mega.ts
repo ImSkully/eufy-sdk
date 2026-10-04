@@ -1463,18 +1463,12 @@ export class EufyMega extends EventEmitter {
       const diff = await this.registry.pollChanges();
       for (const dev of diff.added) this.emit("deviceAdded", dev);
       for (const dev of diff.removed) this.emit("deviceRemoved", dev);
-      const reconcile = new Set(diff.params.map((change) => change.deviceSn));
-      for (const change of diff.params) this.registry.retireRealtimeParams(change.deviceSn, [change.paramType]);
-      for (const record of this.registry.list()) {
-        const live = this.liveDevices.get(record.sn)?.deref();
-        if (live && live.stationSn !== this.p2p.stationKeyOf(record.sn)) reconcile.add(record.sn);
-      }
-      for (const sn of reconcile) await this.widenCapabilities(sn);
       this.applyPolledParams(diff.params);
       for (const change of diff.params)
         for (const out of decodeCapabilityEvent({ source: "poll", ...change }, this.capsForEvent(change.deviceSn)))
           this.emitSemantic(out.event, out.payload, { refresh: out.refresh });
       for (const dev of diff.reported) this.emit("deviceState", this.stateOf(dev));
+      for (const change of diff.params) await this.widenCapabilities(change.deviceSn);
     } catch (e) {
       this.reportError(e);
     }
@@ -1587,8 +1581,9 @@ export class EufyMega extends EventEmitter {
    * starts arriving. This closes the gap for the `Device` instances already handed out: on new
    * evidence they gain the accessor, bound, without the caller re-fetching.
    *
-   * Only widens, never retracts, and re-binds when a capability or property schema changed. Best-effort:
-   * a device that has been dropped, or a re-bind that fails, must not break the poll loop for every other device.
+   * Only widens, never retracts, and re-binds only when something was actually gained, so the common
+   * poll costs one set comparison. Best-effort: a device that has been dropped, or a re-bind that
+   * fails, must not break the poll loop for every other device.
    *
    * The whole record goes in, never a field-by-field copy of it: since this path only ever ADDS, a
    * field left behind here re-grants what the first resolution deliberately withheld — an attached
@@ -1598,10 +1593,8 @@ export class EufyMega extends EventEmitter {
     const dev = this.liveDevices.get(sn)?.deref();
     if (!dev) return;
     try {
-      const record = await this.registry.record(sn);
-      const previousProperties = dev.properties;
-      const gained = dev.reresolve(record);
-      if (!gained.length && previousProperties === dev.properties) return;
+      const gained = dev.reresolve(await this.registry.record(sn));
+      if (!gained.length) return;
       const ctx = await this.commandContext(sn);
       dev.bindActions(
         ctx,
@@ -1611,8 +1604,7 @@ export class EufyMega extends EventEmitter {
         rawDpCodec,
       );
       this.boundParamIds.set(sn, ctx.paramIds);
-      this.applyAndAnnounce(dev, { ...record.params, ...record.dpParams });
-      if (gained.length) this.emit("deviceCapabilities", { deviceSn: sn, gained, capabilities: [...dev.capabilities] });
+      this.emit("deviceCapabilities", { deviceSn: sn, gained, capabilities: [...dev.capabilities] });
     } catch (e) {
       this.reportError(e);
     }
@@ -2102,18 +2094,6 @@ export class EufyMega extends EventEmitter {
       (resolved.codec === "vacuum" || resolved.codec === "mower") && rec.model
         ? await this.fetchDpCatalog(rec.model)
         : undefined;
-    if (rec.model === "T8410") {
-      const booleanParam = (id: number): string | undefined => {
-        const value = rec.params[id];
-        return value === undefined || ["0", "1", "true", "false"].includes(value) ? value : "<non-boolean>";
-      };
-      this.opts.logger?.info(
-        `[context] T8410 power-v4 type=${rec.deviceType ?? "unknown"} channel=${channel}` +
-          ` stationModel=${rec.parentSn?.slice(0, 5) ?? "standalone"}` +
-          ` firmware=${recordString(raw, "main_sw_version") ?? "unknown"}` +
-          ` reported1035=${booleanParam(1035) ?? "absent"} reported2001=${booleanParam(2001) ?? "absent"}`,
-      );
-    }
     return {
       channel,
       codec: resolved.codec,

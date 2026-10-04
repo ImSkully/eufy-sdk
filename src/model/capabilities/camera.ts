@@ -25,7 +25,7 @@ import { CameraDisabledError, type Command, type MediaProvider } from "../../cor
 export const CAMERA_CMD = {
   /** Camera on/off. Read and write polarity depend on the family and topology. */
   CAMERA_ENABLE: 1035,
-  /** Wrapped indoor camera power switch on HomeBase 3. */
+  /** Wrapped T8410 power switch on HomeBase 3. */
   PRIVACY_MODE: 6250,
   /**
    * Camera status LED on/off — the "power/recording" indicator. The
@@ -405,23 +405,9 @@ function isT8410HomeBase3(ctx: AvailabilityContext): boolean {
   return ctx.model === "T8410" && ctx.stationSerial?.startsWith("T8030") === true;
 }
 
-/**
- * Indoor cameras on a HomeBase 3 with firmware >= 2.3.1.0 use the wrapped privacy switch for power.
- * Restores the route used by the older client on this topology; current-app wire confirmation is pending.
- * Missing station or firmware evidence retains the scalar route. Mini and S350 cameras remain outside
- * this correction because their separate privacy routes are not covered by the reported regression.
- */
+/** T8410 on HomeBase 3 firmware >= 2.3.1.0 uses the wrapped disable-bit power switch. */
 function usesHomeBasePowerPayload(ctx: CommandContext): boolean {
-  if (
-    ctx.homeBaseAttached !== true ||
-    !ctx.stationSerial?.startsWith("T8030") ||
-    !isIndoorCamera(ctx) ||
-    isIndoorCamMini(ctx) ||
-    isIndoorPanTiltS350(ctx) ||
-    !ctx.firmwareVersion ||
-    !/^\d+(?:\.\d+){2,3}$/.test(ctx.firmwareVersion)
-  )
-    return false;
+  if (!isT8410HomeBase3(ctx) || !ctx.firmwareVersion || !/^\d+(?:\.\d+){2,3}$/.test(ctx.firmwareVersion)) return false;
   const version = ctx.firmwareVersion.split(".").map(Number);
   const minimum = [2, 3, 1, 0];
   for (let i = 0; i < minimum.length; i++) {
@@ -433,12 +419,12 @@ function usesHomeBasePowerPayload(ctx: CommandContext): boolean {
 
 /** The T8410 privacy write does not reliably move its startup enablement report on HomeBase 3. */
 function hasUnreflectedHomeBasePower(ctx: CommandContext): boolean {
-  return isT8410HomeBase3(ctx) && usesHomeBasePowerPayload(ctx) && !ctx.paramIds.has(2001);
+  return usesHomeBasePowerPayload(ctx) && !ctx.paramIds.has(2001);
 }
 
 /**
- * Camera power: a HomeBase 3 indoor camera uses the wrapped disable-bit switch when its firmware
- * selects that route. Other cameras retain the captured 1035 scalar command and family polarity.
+ * Camera power: T8410 on HomeBase 3 uses the wrapped disable-bit switch when its firmware selects
+ * that route. Other cameras retain the captured 1035 scalar command and family polarity.
  * The payload retains mValue3=0 and the camera channel; the transport injects the account identity.
  */
 function powerCommand(on: boolean, ctx: CommandContext): Command {
@@ -501,15 +487,7 @@ function enablementReflection(
   if (ctx.paramIds.has(CAMERA_CMD.CAMERA_ENABLE)) {
     return {
       param: CAMERA_CMD.CAMERA_ENABLE,
-      expected: isT8410HomeBase3(ctx)
-        ? on
-          ? 1
-          : 0
-        : usesHomeBasePowerPayload(ctx)
-          ? on
-            ? 0
-            : 1
-          : powerValue(on, ctx),
+      expected: powerValue(on, ctx),
       observed: on,
     };
   }
@@ -547,10 +525,8 @@ export const CAMERA_MEMBERS = {
    * 1035, standalone indoor/outdoor cams under 2001 OPEN_DEVICE with direct polarity, so 2001 is a
    * read-alias. Both verified live, and the write polarity is confirmed against the app's own frames.
    *
-   * T8410 on HomeBase 3 reports 1035 as an enable bit ("1" ⇒ ON), as identified by the user's
-   * reversed-state report and numeric runtime params. Its 6250 command still writes a disable bit.
-   * The startup reading remains available, but runtime reports show it does not reliably reflect that
-   * privacy write. `readReflectsWrite` states this distinction to the caller.
+   * T8410 on HomeBase 3 reports 1035 as an enable bit ("1" ⇒ ON). That reported state does not reliably
+   * reflect the privacy command. `readReflectsWrite` states this distinction.
    *
    * The privacy param (6250) is reported by the outdoor-PT family and by no other camera measured, and both
    * of its polarities are observed. It is deliberately NOT aliased here: it moved in the same step as 1035, so
