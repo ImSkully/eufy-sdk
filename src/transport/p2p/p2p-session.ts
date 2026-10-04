@@ -212,6 +212,8 @@ const STALE_RETRANSMIT_DEPTH = 1024;
 const PUNCH_PROBE_SOCKETS = 7;
 /** Chosen maximum wait for a missing datagram; 250 ms is not a measured device resend delay. */
 const REORDER_WAIT_MS = 250;
+/** Bounds video reordering; measured missing video datagrams arrived up to 679 ms after a gap was observed. */
+const VIDEO_REORDER_WAIT_MS = 700;
 /** Maximum later datagrams held behind a hole, bounding retained memory and the delay before resuming. */
 const REORDER_MAX_DATAGRAMS = 128;
 /**
@@ -1912,7 +1914,7 @@ export class P2PSession extends EventEmitter {
    * if the missing one arrives. A logical frame's payload spans datagrams that carry no header of their
    * own, so reassembling around a hole is impossible; waiting for it is what keeps the frame whole.
    *
-   * Only once {@link REORDER_WAIT_MS} passes, or {@link REORDER_MAX_DATAGRAMS} pile up, is the datagram
+   * Only once the data type's reorder wait passes, or {@link REORDER_MAX_DATAGRAMS} pile up, is the datagram
    * treated as lost: a pending frame is discarded and delivery resumes from the earliest held datagram.
    */
   private onData(msg: Buffer, addr: Address): void {
@@ -1931,6 +1933,7 @@ export class P2PSession extends EventEmitter {
       this.clearReorderTimer(dataType);
       this.reorderByType.delete(dataType);
       this.pendingByDataType.delete(dataType);
+      if (dataType === P2PDataType.VIDEO) this.emit("videoGap");
       this.lastSeqByType.set(dataType, seqNo);
       this.reassemble(dataType, msg.subarray(8));
       return;
@@ -1963,10 +1966,13 @@ export class P2PSession extends EventEmitter {
   private armReorderTimer(dataType: number): void {
     const reorder = this.reorderByType.get(dataType);
     if (!reorder?.held.size || reorder.timer) return;
-    const timer = setTimeout(() => {
-      reorder.timer = undefined;
-      this.abandonHole(dataType);
-    }, REORDER_WAIT_MS);
+    const timer = setTimeout(
+      () => {
+        reorder.timer = undefined;
+        this.abandonHole(dataType);
+      },
+      dataType === P2PDataType.VIDEO ? VIDEO_REORDER_WAIT_MS : REORDER_WAIT_MS,
+    );
     timer.unref?.();
     reorder.timer = timer;
   }
@@ -1997,6 +2003,7 @@ export class P2PSession extends EventEmitter {
     if (this.pendingByDataType.has(dataType) && this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS)
       this.trace({ phase: "datagram-gap", dataType });
     this.pendingByDataType.delete(dataType);
+    if (dataType === P2PDataType.VIDEO) this.emit("videoGap");
     const last = this.lastSeqByType.get(dataType)!;
     const earliest = [...held.keys()].sort((a, b) => ((a - last) & 0xffff) - ((b - last) & 0xffff))[0];
     this.lastSeqByType.set(dataType, (earliest - 1) & 0xffff);
