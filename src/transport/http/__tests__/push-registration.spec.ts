@@ -1,33 +1,20 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { MegaHttpClient } from "../mega-client.js";
 
-type MegaInternals = {
-  post: (service: string, path: string, body: unknown) => Promise<unknown>;
-  securityAppPost: (path: string, body: Record<string, unknown>) => Promise<unknown>;
-};
-
-function makeClient(): { mega: MegaHttpClient; internals: MegaInternals } {
-  const mega = new MegaHttpClient({
-    email: "synthetic@example.invalid",
-    password: "synthetic",
-    countryCode: "US",
-    region: "us-pr",
-  });
-
-  return {
-    mega,
-    internals: mega as unknown as MegaInternals,
-  };
-}
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
-
 describe("MegaHttpClient push registration", () => {
   it("registers the same FCM token with Mega and Security, then checks Security push", async () => {
-    const { mega, internals } = makeClient();
+    const mega = new MegaHttpClient({
+      email: "synthetic@example.invalid",
+      password: "synthetic",
+      countryCode: "US",
+      region: "us-pr",
+    });
+
+    const internals = mega as unknown as {
+      post: (service: string, path: string, body: unknown) => Promise<unknown>;
+      securityAppPost: (path: string, body: Record<string, unknown>) => Promise<unknown>;
+    };
 
     const post = vi.fn(async () => undefined);
     const securityAppPost = vi.fn(async () => undefined);
@@ -57,8 +44,6 @@ describe("MegaHttpClient push registration", () => {
       transaction: "1700000000000",
     });
 
-    expect(post.mock.invocationCallOrder[0]).toBeLessThan(
-      securityAppPost.mock.invocationCallOrder[0]!,
-    );
+    expect(post.mock.invocationCallOrder[0]).toBeLessThan(securityAppPost.mock.invocationCallOrder[0]!);
   });
 });
