@@ -366,11 +366,17 @@ export type CameraActions = Surface<typeof CAMERA_MEMBERS> & {
  *
  * ✅ Polarity confirmed against the current app's own frames: it wrote `1` to turn a camera on and `0` to
  * turn it off, on cameras of two device types whose enable-bit convention this returns.
+ *
+ * An indoor camera that reports its state under 1035 itself is the exception: there 1035 carries the
+ * disable bit the read already decodes, so the write takes that polarity and both sides agree. ✅ Verified
+ * live on a HomeBase-attached T8400 (deviceType 30) reporting 1035="0" while on and the eufy app enabled.
  */
 function isEnableBitPolarity(ctx: CommandContext): boolean {
   const t = ctx.deviceType;
   if (t === undefined) return false;
-  if (isIndoorCamera(ctx) && !isIndoorCamMini(ctx) && !isIndoorPanTiltS350(ctx)) return true;
+  if (isIndoorCamera(ctx) && !isIndoorCamMini(ctx) && !isIndoorPanTiltS350(ctx)) {
+    return !ctx.paramIds.has(CAMERA_CMD.CAMERA_ENABLE);
+  }
   return ENABLE_BIT_FLOODLIGHT_TYPES.has(t);
 }
 

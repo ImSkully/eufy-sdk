@@ -394,6 +394,18 @@ describe("camera capability module", () => {
       });
     });
 
+    // Live: a HomeBase-attached T8400 reports 1035="0" while on — the disable bit its read already decodes.
+    it("indoor cam reporting 1035 itself (T8400, type 30): disable bit → ON ⇒ 0, OFF ⇒ 1", () => {
+      const reports1035 = ctx(1, { deviceType: 30, model: "T8400", paramIds: new Set([CAMERA_CMD.CAMERA_ENABLE]) });
+      expect(buildCommand("on", true, reports1035)).toMatchObject({ value: 0 });
+      expect(buildCommand("off", false, reports1035)).toMatchObject({ value: 1 });
+      expect(CAMERA_MEMBERS.enabled.observation.reflects(true, reports1035)).toEqual({
+        param: CAMERA_CMD.CAMERA_ENABLE,
+        expected: 0,
+        observed: true,
+      });
+    });
+
     it("floodlight cams 8422/8424 flip to enable bit → ON ⇒ 1", () => {
       expect(buildCommand("on", true, ctx(0, { deviceType: 37, model: "T8422" }))).toMatchObject({ value: 1 });
       expect(buildCommand("on", true, ctx(0, { deviceType: 39, model: "T8424" }))).toMatchObject({ value: 1 });
