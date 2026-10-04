@@ -1334,8 +1334,17 @@ export class P2PSession extends EventEmitter {
     return true;
   }
 
-  /** Stop the realtime media stream (`CMD_STOP_REALTIME_MEDIA`, 1004) on a camera `channel`. */
-  stopLiveMedia(channel: number = STATION_CHANNEL, accountId = ""): void {
+  /**
+   * Stop the realtime media stream (`CMD_STOP_REALTIME_MEDIA`, 1004) on a camera `channel`, in the shape
+   * its runtime topology takes, as {@link startLiveMedia} selects its start:
+   *  - `homeBaseAttached`: `CMD_SET_PAYLOAD` (1350) wrapping `{cmd:1004, mChannel:channel}` at level-2.
+   *  - own-session at level-2: the direct 1004 frame whose entire plaintext is the camera channel as a
+   *    `uint32`, the same 4-byte body as the attached talkback frames. The app sends this frame on closing
+   *    an own-session camera's live view; the camera stops streaming on it within a second, and keeps
+   *    streaming through the 1350-wrapped form.
+   *  - without a level-2 key: the bare 1004 command.
+   */
+  stopLiveMedia(channel: number = STATION_CHANNEL, accountId = "", homeBaseAttached = false): void {
     this.liveStartedChannels.delete(channel);
     for (const [sequence, pending] of this.unackedLiveStarts) {
       if (pending.channel === channel) this.unackedLiveStarts.delete(sequence);
@@ -1344,7 +1353,11 @@ export class P2PSession extends EventEmitter {
       clearInterval(this.liveStartRetransmitTimer);
       this.liveStartRetransmitTimer = undefined;
     }
-    if (this.level2Key) {
+    if (this.level2Key && !homeBaseAttached) {
+      const body = Buffer.allocUnsafe(4);
+      body.writeUInt32LE(channel >>> 0, 0);
+      this.sendRawLevel2Bytes(body, channel, CMD_STOP_REALTIME_MEDIA, 8);
+    } else if (this.level2Key) {
       this.sendMediaPayloadLevel2(CMD_STOP_REALTIME_MEDIA, channel, accountId, {});
     } else {
       this.sendCommand(CMD_STOP_REALTIME_MEDIA, channel);
