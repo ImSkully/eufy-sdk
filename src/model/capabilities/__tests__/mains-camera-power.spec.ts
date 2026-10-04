@@ -1,4 +1,4 @@
-import { cameraPowerTier } from "../../../index.js";
+import { cameraPowerTier } from "../battery.js";
 import { Device } from "../../device.js";
 import { resolveDevice } from "../../registry.js";
 import { bind } from "./bind.js";
