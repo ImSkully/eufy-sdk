@@ -676,7 +676,8 @@ export class P2PCommandRouter {
    *
    * The seal follows the session, as {@link sendBySessionLevel} defines it: a keyed session takes the
    * captured level-2 frame, a keyless one — a standalone camera, which never negotiates a key — the same
-   * body sealed level-1 ({@link P2PSession.sendIntCommand}). Both are replayed {@link DIRECT_CMD_SENDS}× at
+   * body sealed level-1 ({@link P2PSession.sendIntCommand}). ✅ The level-1 frame restarted a standalone
+   * indoor camera on hardware (2026-10-05). Both are replayed {@link DIRECT_CMD_SENDS}× at
    * 200ms, as every other unacknowledged control here is.
    */
   async rebootStation(sn: string): Promise<void> {

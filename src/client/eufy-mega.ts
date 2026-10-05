@@ -2042,7 +2042,7 @@ export class EufyMega extends EventEmitter {
    * A camera attached to a HomeBase is not — the same frame would restart its HomeBase — so its serial
    * throws, as does any non-camera serial, rather than doing nothing. The device drops its connection
    * and returns after a minute or two; a HomeBase takes everything behind it offline meanwhile.
-   * Verified on real hardware against a HomeBase.
+   * Verified on real hardware against a HomeBase and a standalone indoor camera.
    */
   async reboot(sn: string): Promise<void> {
     const ctx = await this.commandContext(sn);
