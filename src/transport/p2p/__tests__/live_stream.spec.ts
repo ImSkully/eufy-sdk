@@ -17,6 +17,72 @@ describe("LiveStream", () => {
     expect(session.stopped).toBe(1);
   });
 
+  it("holds dependent video after transport loss until a fresh keyframe", () => {
+    const { session, live } = mk({ keepAliveMs: 0 });
+    const video = vi.fn();
+    live.on("video", video);
+    live.start();
+    session.push(p2pVideoFrame({ keyframe: true, nal: Buffer.from([0x67, 1, 2, 3]) }));
+    session.emit("videoGap");
+    session.push(p2pVideoFrame({ keyframe: false, nal: Buffer.from([0x41, 9]) }));
+    expect(video).toHaveBeenCalledTimes(1);
+    session.push(p2pVideoFrame({ keyframe: true, nal: Buffer.from([0x67, 4, 5, 6]) }));
+    expect(video).toHaveBeenCalledTimes(2);
+    session.push(p2pVideoFrame({ keyframe: false, nal: Buffer.from([0x41, 10]) }));
+    expect(video).toHaveBeenCalledTimes(3);
+    live.stop();
+  });
+
+  it("resynchronizes each camera separately when two streams share one session", () => {
+    const session = new FakeP2PSession();
+    const first = new LiveStream(session as unknown as P2PSession, {
+      channel: 0,
+      homeBaseAttached: true,
+      keepAliveMs: 0,
+    }).start();
+    const second = new LiveStream(session as unknown as P2PSession, {
+      channel: 2,
+      homeBaseAttached: true,
+      keepAliveMs: 0,
+    }).start();
+    const firstVideo = vi.fn();
+    const secondVideo = vi.fn();
+    first.on("video", firstVideo);
+    second.on("video", secondVideo);
+
+    session.push(p2pVideoFrame({ channel: 0, keyframe: true, nal: Buffer.from([0x67, 1]) }));
+    session.push(p2pVideoFrame({ channel: 2, keyframe: true, nal: Buffer.from([0x67, 2]) }));
+    expect(firstVideo).toHaveBeenCalledOnce();
+    expect(secondVideo).toHaveBeenCalledOnce();
+
+    session.emit("videoGap");
+    session.push(p2pVideoFrame({ channel: 0, keyframe: false, nal: Buffer.from([0x41, 1]) }));
+    session.push(p2pVideoFrame({ channel: 2, keyframe: false, nal: Buffer.from([0x41, 2]) }));
+    expect(firstVideo).toHaveBeenCalledOnce();
+    expect(secondVideo).toHaveBeenCalledOnce();
+
+    session.push(p2pVideoFrame({ channel: 0, keyframe: true, nal: Buffer.from([0x67, 3]) }));
+    session.push(p2pVideoFrame({ channel: 2, keyframe: false, nal: Buffer.from([0x41, 4]) }));
+    expect(firstVideo).toHaveBeenCalledTimes(2);
+    expect(secondVideo).toHaveBeenCalledOnce();
+    session.push(p2pVideoFrame({ channel: 2, keyframe: true, nal: Buffer.from([0x67, 5]) }));
+    expect(secondVideo).toHaveBeenCalledTimes(2);
+
+    first.stop();
+    second.stop();
+  });
+
+  it("reports video sequence loss once at warning level", () => {
+    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const { session, live } = mk({ keepAliveMs: 0, logger });
+    live.start();
+    session.emit("videoGap");
+    session.emit("videoGap");
+    expect(logger.warn).toHaveBeenCalledOnce();
+    expect(logger.debug).toHaveBeenCalledOnce();
+    live.stop();
+    expect(session.listenerCount("videoGap")).toBe(0);
+  });
   it("emits Annex-B video with the 22-byte header stripped + keyframe flag + resolution", () => {
     const { session, live } = mk();
     const frames: any[] = [];
@@ -274,19 +340,31 @@ describe("LiveStream access-unit reassembly", () => {
     session.push(videoChunk(filled, { timestamp: 0x1000 }));
     session.push(videoChunk(small, { timestamp: 0x1000, keyframe: false }));
 
+    expect(frames).toHaveLength(0);
+    session.push(videoChunk(small, { timestamp: 0x2000, keyframe: true }));
     expect(frames).toHaveLength(1);
     expect(frames[0].data.equals(small)).toBe(true);
   });
 
-  /** Nor one whose header describes a different unit, even where it continues mid-NAL. */
-  it("does not absorb a continuation-shaped frame belonging to another unit", () => {
+  /** A continuation without its first chunk cannot be decoded as an independent unit. */
+  it("drops a continuation-shaped frame belonging to another unit", () => {
     const { session, frames } = mk();
 
     session.push(videoChunk(filled, { timestamp: 0x1000 }));
     session.push(videoChunk(tail, { timestamp: 0x2000 }));
 
+    expect(frames).toHaveLength(0);
+  });
+
+  it("does not resume on an orphan keyframe continuation after sequence loss", () => {
+    const { session, frames } = mk();
+    session.push(videoChunk(filled, { timestamp: 0x1000 }));
+    session.emit("videoGap");
+    session.push(videoChunk(tail, { timestamp: 0x1000, keyframe: true }));
+    expect(frames).toHaveLength(0);
+    session.push(videoChunk(small, { timestamp: 0x2000, keyframe: true }));
     expect(frames).toHaveLength(1);
-    expect(frames[0].data.equals(tail)).toBe(true);
+    expect(frames[0].data.equals(small)).toBe(true);
   });
 
   /**
@@ -294,12 +372,14 @@ describe("LiveStream access-unit reassembly", () => {
    * arrives is ended by the next unit while still full. Handing those bytes to a decoder is what produces
    * `error while decoding MB …, bytestream -28` — it ran off the end of a slice whose header promised more.
    */
-  it("drops a unit whose tail never arrived rather than delivering truncated bytes", () => {
+  it("drops a unit whose tail never arrived and waits for a keyframe", () => {
     const { session, frames } = mk();
 
     session.push(videoChunk(filled, { timestamp: 0x1000 }));
     session.push(videoChunk(small, { timestamp: 0x2000, keyframe: false }));
 
+    expect(frames).toHaveLength(0);
+    session.push(videoChunk(small, { timestamp: 0x3000, keyframe: true }));
     expect(frames).toHaveLength(1);
     expect(frames[0].data.equals(small)).toBe(true);
   });

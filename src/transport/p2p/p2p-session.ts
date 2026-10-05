@@ -1931,6 +1931,7 @@ export class P2PSession extends EventEmitter {
       this.clearReorderTimer(dataType);
       this.reorderByType.delete(dataType);
       this.pendingByDataType.delete(dataType);
+      if (dataType === P2PDataType.VIDEO) this.emit("videoGap");
       this.lastSeqByType.set(dataType, seqNo);
       this.reassemble(dataType, msg.subarray(8));
       return;
@@ -1997,6 +1998,7 @@ export class P2PSession extends EventEmitter {
     if (this.pendingByDataType.has(dataType) && this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS)
       this.trace({ phase: "datagram-gap", dataType });
     this.pendingByDataType.delete(dataType);
+    if (dataType === P2PDataType.VIDEO) this.emit("videoGap");
     const last = this.lastSeqByType.get(dataType)!;
     const earliest = [...held.keys()].sort((a, b) => ((a - last) & 0xffff) - ((b - last) & 0xffff))[0];
     this.lastSeqByType.set(dataType, (earliest - 1) & 0xffff);
