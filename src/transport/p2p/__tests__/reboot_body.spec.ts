@@ -1,4 +1,7 @@
+import { vi } from "vitest";
 import { buildDirectBinaryBody } from "../write-commands.js";
+import { buildIntCommandPayload } from "../codec.js";
+import { connectedSession, routerWithSession, ACCOUNT_ID, STATION_SN } from "./session-fixtures.js";
 import { P2P_ENVELOPE } from "../envelope.js";
 
 /**
@@ -33,5 +36,53 @@ describe("RESTART_HUB reboot frame", () => {
     const withChannel = buildDirectBinaryBody(0, ACCOUNT, 0);
     expect(withChannel.length).toBe(136);
     expect(buildDirectBinaryBody(0, ACCOUNT).length).toBe(132);
+  });
+});
+
+/**
+ * The seal follows the session. A keyed session gets the captured level-2 frame; a keyless one — a standalone
+ * camera, which never negotiates a key — gets the same body sealed level-1, since a level-2 frame cannot be
+ * built without the key.
+ */
+describe("RESTART_HUB seal", () => {
+  it("frames the level-1 body as the captured level-2 body, on channel 255", () => {
+    const frame = buildIntCommandPayload(0, ACCOUNT_ID, 255);
+    const body = frame.subarray(10);
+    expect(frame.readUInt16LE(0)).toBe(body.length);
+    expect(frame[6]).toBe(255);
+    expect(frame[7]).toBe(0);
+    expect(body.equals(buildDirectBinaryBody(0, ACCOUNT_ID))).toBe(true);
+  });
+
+  it("marks and pads the level-1 body when a level-1 key seals it", () => {
+    const frame = buildIntCommandPayload(0, ACCOUNT_ID, 255, Buffer.alloc(16, 1));
+    expect(frame[7]).toBe(1);
+    expect(frame.readUInt16LE(0) % 16).toBe(0);
+  });
+
+  it("sends the captured level-2 frame on a keyed session", async () => {
+    const session = Object.assign(connectedSession(true), {
+      sendRawLevel2Bytes: vi.fn(() => true),
+      sendIntCommand: vi.fn(),
+    });
+    await routerWithSession(session).rebootStation(STATION_SN);
+    expect(session.sendIntCommand).not.toHaveBeenCalled();
+    expect(session.sendRawLevel2Bytes).toHaveBeenCalledWith(
+      buildDirectBinaryBody(0, ACCOUNT_ID),
+      255,
+      P2P_ENVELOPE.RESTART_HUB,
+      8,
+    );
+  });
+
+  it("sends the level-1 frame on a keyless session, replayed like the level-2 one", async () => {
+    const session = Object.assign(connectedSession(false), {
+      sendRawLevel2Bytes: vi.fn(() => true),
+      sendIntCommand: vi.fn(),
+    });
+    await routerWithSession(session).rebootStation(STATION_SN);
+    expect(session.sendRawLevel2Bytes).not.toHaveBeenCalled();
+    expect(session.sendIntCommand).toHaveBeenCalledWith(P2P_ENVELOPE.RESTART_HUB, 0, ACCOUNT_ID, 255);
+    expect(session.sendIntCommand.mock.calls.length).toBeGreaterThan(1);
   });
 });

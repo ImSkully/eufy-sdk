@@ -355,6 +355,28 @@ export function buildStringCommandPayload(value: string, channel = 0, key?: Buff
 }
 
 /**
+ * Build an **int** command body: `value(u32 LE) ‖ strValue(len-prefixed)`, AES-128-ECB encrypted (level-1)
+ * like {@link buildStringCommandPayload}. Its plaintext is the channel-less station-scalar body the level-2
+ * seal carries (`[u32 value][account_id padded to 128]`), so one control can take either seal by session.
+ * The `strValue` uses the 128-byte-chunk length prefix ({@link stringWithLength}).
+ */
+export function buildIntCommandPayload(
+  value: number,
+  strValue: string,
+  channel = 0,
+  key?: Buffer,
+  encType = 1,
+): Buffer {
+  const encrypted = !!key && key.length === 16;
+  const valueBuf = Buffer.allocUnsafe(4);
+  valueBuf.writeUInt32LE(value >>> 0, 0);
+  const strBuf = strValue.length === 0 ? Buffer.alloc(0) : stringWithLength(strValue);
+  const body = Buffer.concat([valueBuf, strBuf]);
+  const data = encrypted ? encryptP2PData(paddingP2PData(body), key!) : body;
+  return buildRawCommandPayload(data, channel, encrypted ? encType : 0);
+}
+
+/**
  * Build an **int+string** command body: `valueSub(u32 LE) ‖ value(u32 LE) ‖ strValue(len-prefixed)`,
  * AES-128-ECB encrypted (level-1) like {@link buildStringCommandPayload}. This is the wire shape the
  * eufy app uses for the floodlight/spotlight manual switch (`CMD_SET_FLOODLIGHT_MANUAL_SWITCH` 1400)

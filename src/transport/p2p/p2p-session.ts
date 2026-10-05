@@ -41,6 +41,7 @@ import {
   buildLookupWithKeyPayload2,
   buildRawCommandPayload,
   buildStringCommandPayload,
+  buildIntCommandPayload,
   buildIntStringCommandPayload,
   buildStringPairCommandPayload,
   buildVoidCommandPayload,
@@ -1240,6 +1241,20 @@ export class P2PSession extends EventEmitter {
     const data = Buffer.concat([
       buildCommandHeader(this.seqNumber, commandType),
       buildStringCommandPayload(value, channel, this.level1Key, 1),
+    ]);
+    this.seqNumber = (this.seqNumber + 1) & 0xffff;
+    this.send(this.connectAddress, RequestMessageType.DATA, data);
+  }
+
+  /**
+   * Send an **int control command** over the level-1 (AES-128-ECB) channel: `value` and `strValue` (admin
+   * `account_id`) on `channel`. See {@link buildIntCommandPayload}. Fire-and-forget.
+   */
+  sendIntCommand(commandType: number, value: number, strValue: string, channel = STATION_CHANNEL): void {
+    if (!this.connectAddress) throw new Error(`P2P session ${this.cfg.stationSn} is not connected`);
+    const data = Buffer.concat([
+      buildCommandHeader(this.seqNumber, commandType),
+      buildIntCommandPayload(value, strValue, channel, this.level1Key, 1),
     ]);
     this.seqNumber = (this.seqNumber + 1) & 0xffff;
     this.send(this.connectAddress, RequestMessageType.DATA, data);
