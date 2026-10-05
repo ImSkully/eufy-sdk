@@ -212,7 +212,7 @@ const STALE_RETRANSMIT_DEPTH = 1024;
 const PUNCH_PROBE_SOCKETS = 7;
 /** Chosen maximum wait for a missing datagram; 250 ms is not a measured device resend delay. */
 const REORDER_WAIT_MS = 250;
-/** Bounds video reordering; measured missing video datagrams arrived up to 679 ms after a gap was observed. */
+/** Maximum wait for a missing video datagram. */
 const VIDEO_REORDER_WAIT_MS = 700;
 /** Maximum later datagrams held behind a hole, bounding retained memory and the delay before resuming. */
 const REORDER_MAX_DATAGRAMS = 128;
@@ -1933,7 +1933,6 @@ export class P2PSession extends EventEmitter {
       this.clearReorderTimer(dataType);
       this.reorderByType.delete(dataType);
       this.pendingByDataType.delete(dataType);
-      if (dataType === P2PDataType.VIDEO) this.emit("videoGap");
       this.lastSeqByType.set(dataType, seqNo);
       this.reassemble(dataType, msg.subarray(8));
       return;
@@ -2003,7 +2002,6 @@ export class P2PSession extends EventEmitter {
     if (this.pendingByDataType.has(dataType) && this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS)
       this.trace({ phase: "datagram-gap", dataType });
     this.pendingByDataType.delete(dataType);
-    if (dataType === P2PDataType.VIDEO) this.emit("videoGap");
     const last = this.lastSeqByType.get(dataType)!;
     const earliest = [...held.keys()].sort((a, b) => ((a - last) & 0xffff) - ((b - last) & 0xffff))[0];
     this.lastSeqByType.set(dataType, (earliest - 1) & 0xffff);
