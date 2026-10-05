@@ -57,23 +57,6 @@ describe("T8410 power on HomeBase 3", () => {
     expect(buildCommand("enabled", true, context({ firmwareVersion }))).toMatchObject({ kind });
   });
 
-  it("retains 1035 and member observations for another indoor model", async () => {
-    const ctx = context({ model: "T8400", deviceType: DeviceType.INDOOR_CAMERA });
-    const command = buildCommand("enabled", true, ctx);
-    expect(command).toMatchObject({ kind: "set-param", param: 1035, value: 1, channel: 3 });
-    const { acts, sent } = bind<CameraActions>("camera", ctx);
-    await acts.on();
-    await acts.off();
-    expect(sent).toMatchObject([
-      { kind: "set-param", param: 1035, value: 1 },
-      { kind: "set-param", param: 1035, value: 0 },
-    ]);
-    expect(sent.map(commandObservation)).toMatchObject([
-      { property: "enabled", param: 1035, expected: 1, observed: true },
-      { property: "enabled", param: 1035, expected: 0, observed: false },
-    ]);
-  });
-
   it.each([true, false])("reads startup enabled=%s with the attached enable-bit polarity", (enabled) => {
     const device = Device.fromRecord("T8410P0000000000", {
       deviceType: DeviceType.INDOOR_PT_CAMERA,

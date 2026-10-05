@@ -4,15 +4,7 @@ import { isIndoorCamera, isIndoorCamMini, isIndoorPanTiltS350 } from "../device-
 import { setScalar, setPayload, setJson, hasCapability } from "./access.js";
 import { AUDIO_CMD } from "./audio.js";
 import { cameraPowerTier } from "./battery.js";
-import {
-  accepts,
-  memberWrite,
-  propertiesOf,
-  provided,
-  type Members,
-  type Surface,
-  type MemberDeps,
-} from "./members.js";
+import { accepts, propertiesOf, provided, type Members, type Surface, type MemberDeps } from "./members.js";
 import type { AvailabilityContext, CapabilityModule, CapabilityActions, CommandContext } from "./types.js";
 import { CameraDisabledError, type Command, type MediaProvider } from "../../core/contracts.js";
 
@@ -921,8 +913,8 @@ export const CAMERA: CapabilityModule = {
   /** Only the no-argument power verbs, which carry no value for a member to hold. */
   actions({ ctx, sink }: MemberDeps): CapabilityActions {
     return {
-      on: () => sink.dispatch(memberWrite("enabled", CAMERA_MEMBERS.enabled, true, ctx)),
-      off: () => sink.dispatch(memberWrite("enabled", CAMERA_MEMBERS.enabled, false, ctx)),
+      on: () => sink.dispatch(powerCommand(true, ctx)),
+      off: () => sink.dispatch(powerCommand(false, ctx)),
     };
   },
 };
