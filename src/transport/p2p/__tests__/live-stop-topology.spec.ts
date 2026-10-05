@@ -49,4 +49,13 @@ describe("live stop", () => {
     expect(sealed.length).toBe(36);
     expect(openLevel2(sealed)).toEqual(Buffer.from([0x00, 0x00, 0x00, 0x00]));
   });
+
+  it("keeps the 1350-wrapped {cmd:1004} for a HomeBase-attached camera", () => {
+    const { session: s, sent } = session();
+    s.stopLiveMedia(0, "account", true);
+
+    const f = frameOf(sent[0]);
+    expect(f.readUInt16LE(4)).toBe(1350);
+    expect(JSON.parse(openLevel2(f.subarray(16)).toString())).toMatchObject({ cmd: 1004, mChannel: 0 });
+  });
 });
