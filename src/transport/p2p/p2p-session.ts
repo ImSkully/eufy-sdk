@@ -741,8 +741,8 @@ export class P2PSession extends EventEmitter {
   }
 
   /**
-   * Ask the OS for {@link RECEIVE_BUFFER_BYTES} on a bound socket, and warn once per session when it grants
-   * less or refuses.
+   * Ask the OS for {@link RECEIVE_BUFFER_BYTES} on a bound socket, and log once per session when it grants
+   * less (debug) or refuses (warn).
    *
    * The request is made here rather than through `createSocket`'s `recvBufferSize`: Node applies that option
    * inside the bind callback, where a refusal is thrown out of reach of this session and ends the process.
@@ -757,9 +757,11 @@ export class P2PSession extends EventEmitter {
     }
     if (granted >= RECEIVE_BUFFER_BYTES || this.receiveBufferReported) return;
     this.receiveBufferReported = true;
-    this.logger.warn(
+    const [level, outcome] =
+      granted > 0 ? (["debug", ` (granted ${granted})`] as const) : (["warn", " (request refused)"] as const);
+    this.logger[level](
       `[p2p] ${this.cfg.stationSn} UDP receive buffer below the ${RECEIVE_BUFFER_BYTES} bytes requested` +
-        (granted > 0 ? ` (granted ${granted})` : " (request refused)") +
+        outcome +
         `; live video can lose keyframes. Raise the OS limit (net.core.rmem_max on Linux, ` +
         `kern.ipc.maxsockbuf on BSD) to at least ${RECEIVE_BUFFER_BYTES}.`,
     );
