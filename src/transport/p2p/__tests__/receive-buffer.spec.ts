@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { P2PSession } from "../p2p-session.js";
 
 /**
- * A session's socket asks for a receive buffer large enough to queue a keyframe burst, and says so at debug
- * when the OS granted less or refused — a host-OS limit, not a fault, so it is not a warning.
+ * A session's socket asks for a receive buffer large enough to queue a keyframe burst, and says so when the OS
+ * granted less or refused.
  *
  * What the OS grants is stubbed: the test host's own limits are not what is under test.
  */
@@ -55,20 +55,13 @@ describe("the receive buffer a session's socket asks for", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("says nothing when the OS granted the full request", async () => {
-    grant(REQUESTED);
-    const { session, notes } = newSession();
-    await connectAndClose(session);
-    expect(notes()).toHaveLength(0);
-  });
-
-  it("connects and notes it instead of throwing when the OS refuses the request", async () => {
+  it("connects and warns instead of throwing when the OS refuses the request", async () => {
     vi.spyOn(dgram.Socket.prototype, "setRecvBufferSize").mockImplementation(() => {
       throw new Error("ENOBUFS");
     });
-    const { session, notes } = newSession();
+    const { session, warn } = newSession();
     await expect(connectAndClose(session)).resolves.toBeUndefined();
-    expect(notes()[0]).toContain("request refused");
+    expect(warn.mock.calls[0]?.[0]).toContain("request refused");
   });
 
   it("notes it once per session, not again on a reconnect", async () => {
