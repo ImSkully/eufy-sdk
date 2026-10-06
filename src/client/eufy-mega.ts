@@ -77,7 +77,7 @@ import {
 } from "../model/index.js";
 import { isHomeBase } from "../model/device-family.js";
 import { cameraPowerTier } from "../model/capabilities/battery.js";
-import { DeviceRegistry, type ParamChange } from "./device-registry.js";
+import { DeviceRegistry, type DeviceRecord, type ParamChange } from "./device-registry.js";
 import type {
   EufyMegaOptions,
   EufyMegaEvent,
@@ -618,12 +618,20 @@ export class EufyMega extends EventEmitter {
    *
    * The evidence set is widened, never replaced: the ids come back through the cloud record, and a
    * record that omits a realtime-only id would otherwise un-know it and re-trigger on the next report.
+   *
+   * The device is re-resolved against the fresh record before binding. A property gated on a
+   * realtime-only param enters the schema only once that param is evidence, and the value that made it
+   * evidence was stored before the property existed, so the record's realtime params are applied again
+   * to land it under the property's name.
    */
   private async rebindReads(sn: string): Promise<void> {
     const dev = this.liveDevices.get(sn)?.deref();
     if (!dev) return;
     try {
-      const ctx = await this.commandContext(sn);
+      const rec = await this.registry.record(sn);
+      dev.reresolve(rec);
+      if (rec.dpParams) this.applyAndAnnounce(dev, rec.dpParams);
+      const ctx = await this.commandContext(sn, rec);
       dev.bindActions(
         ctx,
         this.commandSinkFor(sn),
@@ -2080,8 +2088,9 @@ export class EufyMega extends EventEmitter {
     }
   }
 
-  private async commandContext(sn: string): Promise<CommandContext> {
-    const rec = await this.registry.record(sn);
+  /** The {@link CommandContext} for a device, built from `known` when that record is already in hand. */
+  private async commandContext(sn: string, known?: DeviceRecord): Promise<CommandContext> {
+    const rec = known ?? (await this.registry.record(sn));
     // Resolve the record synchronously from the registry (already loaded by `record()`) — the same
     // single lookup the command sink uses, and it never opens a transport just to read a record.
     const dev = this.registry.require(sn);
