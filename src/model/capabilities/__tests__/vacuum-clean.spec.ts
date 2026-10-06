@@ -30,6 +30,7 @@ import {
   encodeSelectRoomsClean,
   encodeSelectZonesClean,
   encodeSceneClean,
+  encodeAutoClean,
   encodeCleanParam,
   ModeCtrlParamMethod,
   VACUUM_DP_MESSAGE,
@@ -1530,6 +1531,15 @@ describe("area-selecting ModeCtrl frames", () => {
     const zoneFields = byteCodec.nested((inner.find((f) => f.field === 1) as { value: Buffer }).value)!;
     const quad = byteCodec.nested((zoneFields.find((f) => f.field === 1) as { value: Buffer }).value)!;
     expect(quad.map((f) => f.field)).toEqual([1, 2, 3, 4]);
+  });
+
+  it("starts an auto clean as method 0 with one AutoClean pass in Param field 3", () => {
+    // The vendor's AutoClean.clean_times is valid only when non-zero, so the pass is stated rather
+    // than left at the proto3 default. Method 0 stays off the wire, as on the bare frame.
+    const fields = byteCodec.decode(encodeAutoClean());
+    expect(fields?.find((f) => f.field === 1)).toBeUndefined();
+    expect(fields?.find((f) => f.field === 2)).toMatchObject({ kind: "int" });
+    expect(paramOf(encodeAutoClean(), ModeCtrlParamMethod.AUTO.param)).toEqual([{ field: 1, kind: "int", value: 1n }]);
   });
 
   it("carries a scene by its id alone", () => {

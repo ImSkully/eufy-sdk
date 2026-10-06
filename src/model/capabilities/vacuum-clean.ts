@@ -286,6 +286,12 @@ export const ModeCtrlMethod = {
  * scene id and a map id both arrive on DP 180.
  */
 export const ModeCtrlParamMethod = {
+  /**
+   * `START_AUTO_CLEAN` with its `AutoClean` payload. The vendor's definition comments
+   * `AutoClean.clean_times` as valid only when non-zero; a frame without the payload leaves it at the
+   * proto3 default of 0. RUN on hardware — see {@link encodeAutoClean}.
+   */
+  AUTO: { method: 0, param: 3 },
   /** `START_SELECT_ROOMS_CLEAN` — clean the named rooms of a named map. */
   SELECT_ROOMS: { method: 1, param: 4 },
   /** `START_SELECT_ZONES_CLEAN` — clean the given rectangles of a named map. */
@@ -328,6 +334,9 @@ const SELECT_ZONES_FIELD = {
 
 /** `scene_id` within a `SceneClean`. */
 const SCENE_CLEAN_ID = 1;
+
+/** `clean_times` within an `AutoClean`. */
+const AUTO_CLEAN_TIMES = 1;
 
 /** One room to clean, and where it falls in the running order. */
 export interface VacuumRoomTarget {
@@ -422,6 +431,21 @@ export function encodeSelectZonesClean(mapId: number, zones: readonly VacuumZone
 export function encodeSceneClean(sceneId: number): string {
   const { method, param } = ModeCtrlParamMethod.SCENE;
   return encodeModeCtrlParam(method, param, (p) => p.int(SCENE_CLEAN_ID, sceneId));
+}
+
+/**
+ * Build a whole-floor auto clean carrying an `AutoClean` payload of one pass.
+ * {@link VACUUM_CLEAN_MEMBERS.startCleaning} dispatches this.
+ *
+ * Method 0 with `auto_clean { clean_times: 1 }` in `Param` field 3. The bare method-0 frame
+ * {@link encodeModeCtrl} builds matches a T2351 capture of the vendor app's start, but a robot left
+ * idle by that frame started a whole-floor clean on this one: with the payload absent, `clean_times`
+ * reads as the 0 the vendor's definition calls invalid.
+ * @internal
+ */
+export function encodeAutoClean(): string {
+  const { method, param } = ModeCtrlParamMethod.AUTO;
+  return encodeModeCtrlParam(method, param, (p) => p.int(AUTO_CLEAN_TIMES, 1));
 }
 
 /**
@@ -2960,12 +2984,12 @@ export const VACUUM_CLEAN_MEMBERS = {
     description:
       "Stop smart-follow mode (ModeCtrlRequest method 18 over DP 152). Method number not captured — unverified.",
   },
-  /** Start an auto-clean run via ModeCtrlRequest method 0 (DP 152). AIoT only — Tuya write unverified. */
+  /** Start an auto-clean run via ModeCtrlRequest method 0 with one `AutoClean` pass (DP 152). AIoT only. */
   startCleaning: method(
     ({ sink }) =>
       (): Promise<void> =>
-        sink.dispatch(aiotDp(VACUUM_DP.MODE_CTRL, encodeModeCtrl(ModeCtrlMethod.START_AUTO_CLEAN, nextModeCtrlSeq()))),
-    "Start an auto-clean run (ModeCtrlRequest method 0 over DP 152).",
+        sink.dispatch(aiotDp(VACUUM_DP.MODE_CTRL, encodeAutoClean())),
+    "Start an auto-clean run (ModeCtrlRequest method 0, AutoClean clean_times 1, over DP 152).",
     isAiotVacuum,
   ),
   /** Return to the dock via ModeCtrlRequest method 6 (DP 152). AIoT only — Tuya write unverified. */
