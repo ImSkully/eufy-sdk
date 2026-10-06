@@ -42,6 +42,7 @@ import {
   buildRawCommandPayload,
   buildStringCommandPayload,
   buildIntStringCommandPayload,
+  buildStringPairCommandPayload,
   buildVoidCommandPayload,
   decryptP2PData,
   encryptP2PData,
@@ -69,6 +70,15 @@ const HEARTBEAT_MS = 5_000;
  */
 const PATH_SILENCE_MS = HEARTBEAT_MS * 3;
 const LOOKUP_RETRY_MS = 1_000;
+/**
+ * The receive buffer a session's socket asks the OS for.
+ *
+ * A station sends a keyframe as one burst: measured on a HomeBase 3, up to 161 video datagrams of 1074 bytes
+ * within 10 ms. With the Linux default buffer of 212992 bytes, the kernel dropped part of such bursts before
+ * the socket was read, and the frames those datagrams belonged to arrived incomplete. 4 MiB queues many
+ * such bursts, so a keyframe survives the event loop being busy elsewhere for a moment.
+ */
+const RECEIVE_BUFFER_BYTES = 4 * 1024 * 1024;
 /**
  * How long a station is given to answer a lookup before the connection gives up on it and closes.
  *
@@ -202,6 +212,8 @@ const STALE_RETRANSMIT_DEPTH = 1024;
 const PUNCH_PROBE_SOCKETS = 7;
 /** Chosen maximum wait for a missing datagram; 250 ms is not a measured device resend delay. */
 const REORDER_WAIT_MS = 250;
+/** Maximum wait for a missing video datagram. */
+const VIDEO_REORDER_WAIT_MS = 700;
 /** Maximum later datagrams held behind a hole, bounding retained memory and the delay before resuming. */
 const REORDER_MAX_DATAGRAMS = 128;
 /**
@@ -228,6 +240,13 @@ interface RetainedDatagram {
 const CMD_SET_PAYLOAD = 1350;
 /** CMD_NOTIFY_PAYLOAD (1351) — the station's unsolicited JSON notification. */
 const CMD_NOTIFY_PAYLOAD = 1351;
+/**
+ * The one reply body read for a result code besides the bare four-byte int32: a `CMD_SET_PAYLOAD` answer of
+ * exactly this many bytes, carrying the int32 LE code followed by nothing but zero padding. The length is
+ * not 16-byte aligned, so the level-1 decrypt never opens such a body, and no level-1 plaintext — always a
+ * whole number of blocks — can have it.
+ */
+const PADDED_RESULT_BYTES = 132;
 /** CMD_CAMERA_INFO — a camera reporting its OWN params, as a root-level array. */
 const CMD_CAMERA_INFO = 1103;
 const CMD_DATABASE_IMAGE = 1308;
@@ -240,6 +259,9 @@ const CMD_DATABASE = 1306;
 const DB_QUERY = { FULL_TABLE: 10000, COMBINATION_WITH_AI: 10011 } as const;
 /** AAD for the level-2 (gateway/"signCode 8") AES-256-GCM frames — fixed across all eufy P2P. */
 const GCM_AAD = Buffer.from("eufy security");
+
+/** The level-2 sub-header, counted as one little-endian uint32 from `[00, 03, 02, 01]`. */
+const LEVEL2_SEQ_BASE = 0x01020300;
 
 /**
  * Transport wiring for a PPCS session — internal to the SDK; a host reaches sessions through the facade.
@@ -324,6 +346,60 @@ export interface P2PFrame extends P2PDataFrameHeader {
 /** Per-process counter behind {@link P2PSession.traceId} — see it for why this is not a serial. */
 let traceSequence = 0;
 
+/** How long a station's database reply has to arrive whole, when the caller states no bound. */
+const DB_TABLE_TIMEOUT_MS = 15_000;
+
+/**
+ * The rows of the first complete table document in an accumulated `CMD_DATABASE` reply.
+ *
+ * `undefined` while none has closed, which is what makes the document's own structure the completion
+ * signal: the frames carry no index, no total and no terminator, and the last one is padded past the
+ * closing brace so the accumulation is never valid JSON in its entirety.
+ *
+ * A closed object without a `data` array is not the table and is skipped rather than answered. The
+ * case is a tail left by an earlier reply that timed out: it begins mid-row, closes into a valid
+ * object carrying no rows, and reporting it would answer an empty table for a full one.
+ *
+ * Re-decoded UTF-8 first. `dbChunk` carries latin1, which preserves the bytes and mangles every name
+ * outside ASCII until the document is read back in the encoding it was written in.
+ */
+function firstTableRows(text: string): unknown[] | undefined {
+  const decoded = Buffer.from(text, "latin1").toString("utf8");
+  for (let start = decoded.indexOf("{"); start >= 0; start = decoded.indexOf("{", start + 1)) {
+    const end = closingBrace(decoded, start);
+    if (end < 0) return undefined;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(decoded.slice(start, end + 1));
+    } catch {
+      continue;
+    }
+    const data = (parsed as { data?: unknown } | null)?.data;
+    if (Array.isArray(data)) return data;
+  }
+  return undefined;
+}
+
+/** The index of the brace closing the object opened at `start`, or -1 while it has not arrived. */
+function closingBrace(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inString = false;
+      continue;
+    }
+    if (c === '"') inString = true;
+    else if (c === "{") depth++;
+    else if (c === "}" && --depth === 0) return i;
+  }
+  return -1;
+}
+
 /**
  * A live PPCS session. Internal transport; a host drives cameras through the capability surface.
  * @internal
@@ -333,6 +409,8 @@ export class P2PSession extends EventEmitter {
   private connected = false;
   private connecting = false;
   private closed = false;
+  /** Whether a short receive buffer has been reported, so a reconnect does not repeat the same warning. */
+  private receiveBufferReported = false;
   private connectAddress?: Address;
   private seqNumber = 0;
   /**
@@ -359,8 +437,8 @@ export class P2PSession extends EventEmitter {
   private audioStalled = false;
   private audioRetransmitTimer?: ReturnType<typeof setInterval>;
   private lastPongData?: Buffer;
-  /** When this connection last received a PONG — `undefined` until the first, see {@link pathSilentMs}. */
-  private lastPongAt?: number;
+  /** When the selected peer last answered outbound P2P traffic on this connection. */
+  private lastPeerAt?: number;
   /** Whether the silence has already been stated, so it is traced once per connection rather than per read. */
   private pathStaleTraced = false;
   private lookupTimer?: ReturnType<typeof setInterval>;
@@ -372,8 +450,11 @@ export class P2PSession extends EventEmitter {
   private cloudLookup?: { key: string; addresses: Address[] };
   /** Local outbound IPv4 reported inside LOOKUP_WITH_KEY requests. */
   private selfHost?: string;
-  /** In-flight multi-datagram frame per data channel (see onData). */
-  private readonly pendingByDataType = new Map<number, { header: P2PDataFrameHeader; buf: Buffer }>();
+  /**
+   * In-flight multi-datagram frame per data channel (see reassemble): the payload gathered so far under its
+   * parsed header, or, without a header, the start of a frame header cut by the datagram boundary.
+   */
+  private readonly pendingByDataType = new Map<number, { header?: P2PDataFrameHeader; buf: Buffer }>();
   /** Last delivered datagram sequence number per data type. */
   private readonly lastSeqByType = new Map<number, number>();
   /** Held datagrams and their active gap timer, grouped by data type. */
@@ -432,18 +513,18 @@ export class P2PSession extends EventEmitter {
   /**
    * How long this connection's path has been silent, or nothing where it has never answered.
    *
-   * A PONG is the station stating that the path is alive. `undefined` is neither alive nor dead: it is a station
-   * that has said nothing either way.
+   * PONG and ACK from the selected peer prove the path answers outbound traffic. `undefined` means no such reply
+   * has arrived since connection, so silence alone does not establish a stale path.
    */
   get pathSilentMs(): number | undefined {
-    return this.lastPongAt === undefined ? undefined : Date.now() - this.lastPongAt;
+    return this.lastPeerAt === undefined ? undefined : Date.now() - this.lastPeerAt;
   }
 
   /**
    * Whether this path can still be committed to, on the evidence the heartbeat gives.
    *
-   * False where a pong arrived and then stopped for {@link PATH_SILENCE_MS}. A station that has never ponged is
-   * not known to be dead, so it answers true.
+   * False where selected-peer replies arrived and then stopped for {@link PATH_SILENCE_MS}. A connection with
+   * no post-connect reply is not known to be dead, so it answers true.
    *
    * Traces the silence once per connection, on the read that first observes it.
    */
@@ -659,6 +740,31 @@ export class P2PSession extends EventEmitter {
     return this.connected;
   }
 
+  /**
+   * Ask the OS for {@link RECEIVE_BUFFER_BYTES} on a bound socket, and warn once per session when it grants
+   * less or refuses.
+   *
+   * The request is made here rather than through `createSocket`'s `recvBufferSize`: Node applies that option
+   * inside the bind callback, where a refusal is thrown out of reach of this session and ends the process.
+   */
+  private requestReceiveBuffer(socket: dgram.Socket): void {
+    let granted: number;
+    try {
+      socket.setRecvBufferSize(RECEIVE_BUFFER_BYTES);
+      granted = socket.getRecvBufferSize();
+    } catch {
+      granted = 0;
+    }
+    if (granted >= RECEIVE_BUFFER_BYTES || this.receiveBufferReported) return;
+    this.receiveBufferReported = true;
+    this.logger.warn(
+      `[p2p] ${this.cfg.stationSn} UDP receive buffer below the ${RECEIVE_BUFFER_BYTES} bytes requested` +
+        (granted > 0 ? ` (granted ${granted})` : " (request refused)") +
+        `; live video can lose keyframes. Raise the OS limit (net.core.rmem_max on Linux, ` +
+        `kern.ipc.maxsockbuf on BSD) to at least ${RECEIVE_BUFFER_BYTES}.`,
+    );
+  }
+
   /** Open the socket and start the lookup → hole-punch handshake. */
   async connect(): Promise<void> {
     if (this.connecting || this.connected) return;
@@ -684,6 +790,7 @@ export class P2PSession extends EventEmitter {
         } catch {
           /* broadcast not permitted — cloud path still works */
         }
+        this.requestReceiveBuffer(socket);
         resolve();
       });
     });
@@ -700,6 +807,7 @@ export class P2PSession extends EventEmitter {
       phase: "lookup-channels",
       local: !this.cfg.noBroadcast || this.cfg.localAddress !== undefined,
       cloud: this.cloudLookup !== undefined,
+      ...(this.cloudLookup ? {} : { cloudMissing: dskKey ? "cloud-addresses" : "dsk-key" }),
     });
     this.sendLookups();
     this.lookupTimer = setInterval(() => this.sendLookups(), LOOKUP_RETRY_MS);
@@ -817,9 +925,18 @@ export class P2PSession extends EventEmitter {
    * straddling a level-2 wait on a camera whose failure to deliver video had a separate cause, and did not
    * recur across later probes of it. Correlate an unmodelled type against a WORKING session before reading it
    * as a cause.
+   *
+   * CAM_ADDR is recognised and dropped: it names the address the device is already answering from, and the
+   * CAM_ID that follows it is what completes the connect.
    */
   private onMessage(msg: Buffer, rinfo: dgram.RemoteInfo, socket = this.socket): void {
     if (!socket) return;
+    const fromConnectedPeer =
+      this.connected && this.connectAddress?.host === rinfo.address && this.connectAddress.port === rinfo.port;
+    if (fromConnectedPeer && (hasHeader(msg, ResponseMessageType.PONG) || hasHeader(msg, ResponseMessageType.ACK))) {
+      this.lastPeerAt = Date.now();
+      this.pathStaleTraced = false;
+    }
     if (!hasHeader(msg, ResponseMessageType.DATA)) {
       this.logger.debug(
         `[p2p] ${this.cfg.stationSn} <<< ${rinfo.address}:${rinfo.port} header=${msg.subarray(0, 2).toString("hex")} len=${msg.length}`,
@@ -839,15 +956,13 @@ export class P2PSession extends EventEmitter {
       this.onConnected({ host: rinfo.address, port: rinfo.port }, socket);
     } else if (hasHeader(msg, ResponseMessageType.PONG)) {
       this.lastPongData = msg.length > 4 ? msg.subarray(4) : undefined;
-      this.lastPongAt = Date.now();
-      this.pathStaleTraced = false;
     } else if (hasHeader(msg, ResponseMessageType.PING)) {
       this.send({ host: rinfo.address, port: rinfo.port }, RequestMessageType.PONG, undefined, socket); // echo
     } else if (hasHeader(msg, ResponseMessageType.ACK)) {
       this.onAck(msg);
     } else if (hasHeader(msg, ResponseMessageType.DATA)) {
       if (this.connected) this.onData(msg, { host: rinfo.address, port: rinfo.port });
-    } else {
+    } else if (!hasHeader(msg, ResponseMessageType.CAM_ADDR)) {
       this.logger.debug(`[p2p] ${this.cfg.stationSn} UNHANDLED payload hex: ${msg.toString("hex")}`);
     }
   }
@@ -1152,6 +1267,17 @@ export class P2PSession extends EventEmitter {
     this.send(this.connectAddress, RequestMessageType.DATA, data);
   }
 
+  /** Send a level-1 {@link buildStringPairCommandPayload} command on `channel`. */
+  sendStringPairCommand(commandType: number, strValue: string, strValueSub: string, channel: number): void {
+    if (!this.connectAddress) throw new Error(`P2P session ${this.cfg.stationSn} is not connected`);
+    const data = Buffer.concat([
+      buildCommandHeader(this.seqNumber, commandType),
+      buildStringPairCommandPayload(strValue, strValueSub, channel, this.level1Key, 1),
+    ]);
+    this.seqNumber = (this.seqNumber + 1) & 0xffff;
+    this.send(this.connectAddress, RequestMessageType.DATA, data);
+  }
+
   /**
    * Send a **level-2 (AES-256-GCM, signCode 8) control payload** to a HomeBase-attached device. The
    * target camera is selected by `channel` (= device_channel) + the `mChannel` envelope — the same
@@ -1210,8 +1336,17 @@ export class P2PSession extends EventEmitter {
     return true;
   }
 
-  /** Stop the realtime media stream (`CMD_STOP_REALTIME_MEDIA`, 1004) on a camera `channel`. */
-  stopLiveMedia(channel: number = STATION_CHANNEL, accountId = ""): void {
+  /**
+   * Stop the realtime media stream (`CMD_STOP_REALTIME_MEDIA`, 1004) on a camera `channel`, in the shape
+   * its runtime topology takes, as {@link startLiveMedia} selects its start:
+   *  - `homeBaseAttached`: `CMD_SET_PAYLOAD` (1350) wrapping `{cmd:1004, mChannel:channel}` at level-2.
+   *  - own-session at level-2: the direct 1004 frame whose entire plaintext is the camera channel as a
+   *    `uint32`, the same 4-byte body as the attached talkback frames. The app sends this frame on closing
+   *    an own-session camera's live view; the camera stops streaming on it within a second, and keeps
+   *    streaming through the 1350-wrapped form.
+   *  - without a level-2 key: the bare 1004 command.
+   */
+  stopLiveMedia(channel: number = STATION_CHANNEL, accountId = "", homeBaseAttached = false): void {
     this.liveStartedChannels.delete(channel);
     for (const [sequence, pending] of this.unackedLiveStarts) {
       if (pending.channel === channel) this.unackedLiveStarts.delete(sequence);
@@ -1220,7 +1355,11 @@ export class P2PSession extends EventEmitter {
       clearInterval(this.liveStartRetransmitTimer);
       this.liveStartRetransmitTimer = undefined;
     }
-    if (this.level2Key) {
+    if (this.level2Key && !homeBaseAttached) {
+      const body = Buffer.allocUnsafe(4);
+      body.writeUInt32LE(channel >>> 0, 0);
+      this.sendRawLevel2Bytes(body, channel, CMD_STOP_REALTIME_MEDIA, 8);
+    } else if (this.level2Key) {
       this.sendMediaPayloadLevel2(CMD_STOP_REALTIME_MEDIA, channel, accountId, {});
     } else {
       this.sendCommand(CMD_STOP_REALTIME_MEDIA, channel);
@@ -1456,11 +1595,6 @@ export class P2PSession extends EventEmitter {
   }
 
   /**
-   * Encrypt a level-2 command body (signCode 8): `tag(16) ‖ nonce(12) ‖ [seq,03,02,01](4) ‖
-   * ciphertext`, AES-256-GCM under the negotiated session key, AAD "eufy security". Inverse of
-   * `decryptLevel2`. The 4-byte sub-header is cleartext (skipped on decrypt); `seq` is a counter.
-   */
-  /**
    * Decode a `CMD_VIDEO_FRAME` (1300) payload into clean Annex-B H.264 (the 22-byte frame header
    * stripped). Reversed from the V6 app + live H.264 captures: the 22-byte header is
    * `[0:4]len [4]keyframe [5]streamType [6:8]seq [8:10]fps [10:12]W [12:14]H [14:20]ts`. When the
@@ -1525,14 +1659,19 @@ export class P2PSession extends EventEmitter {
     return this.rsaModulusHex;
   }
 
+  /**
+   * Encrypt a level-2 command body (signCode 8): `tag(16) ‖ nonce(12) ‖ seq(4) ‖ ciphertext`,
+   * AES-256-GCM under the negotiated session key, AAD "eufy security". Inverse of `decryptLevel2`.
+   * The 4-byte sub-header is cleartext (skipped on decrypt); `seq` counts up from {@link LEVEL2_SEQ_BASE}.
+   */
   private encryptLevel2(plaintext: Buffer): Buffer | undefined {
     if (!this.level2Key) return undefined;
     const nonce = randomBytes(12);
     const c = createCipheriv("aes-256-gcm", this.level2Key, nonce);
     c.setAAD(GCM_AAD);
     const ct = Buffer.concat([c.update(plaintext), c.final()]);
-    const sub = Buffer.from([this.level2Seq & 0xff, 0x03, 0x02, 0x01]);
-    this.level2Seq = (this.level2Seq + 1) & 0xff;
+    const sub = Buffer.alloc(4);
+    sub.writeUInt32LE((LEVEL2_SEQ_BASE + this.level2Seq++) >>> 0);
     return Buffer.concat([c.getAuthTag(), nonce, sub, ct]);
   }
 
@@ -1579,11 +1718,16 @@ export class P2PSession extends EventEmitter {
    * The HomeBase streams back `CMD_DATABASE` (1306) frames `{cmd:10000,count,data:[…]}`,
    * level-1-encrypted — decoded and emitted as `dbChunk` (decrypted text) per frame.
    * Tables: `familiar_faces`, `person_basic_info`, `event_person_list`, `history_record_info`.
+   *
+   * Throws while a {@link readDatabase} is accumulating: every table answers `{data:[…]}` and the
+   * frames tie no chunk to its request, so a second query's reply would be assembled into the first
+   * one's buffer and answered as its rows.
    */
   queryDatabase(
     table: string,
     opts: { accountId?: string; channel?: number; query?: Record<string, unknown>; innerCmd?: number } = {},
   ): void {
+    if (this.dbReadInFlight) throw new Error(`queryDatabase: ${this.cfg.stationSn} is already reading a table`);
     if (!this.connectAddress) throw new Error("not connected");
     // The eufy app issues this on mChannel 255 (the station channel), not 0.
     const channel = opts.channel ?? STATION_CHANNEL;
@@ -1650,6 +1794,56 @@ export class P2PSession extends EventEmitter {
       query: this.fullTableQuery(),
     });
   }
+
+  /**
+   * Query one on-station table and answer its rows, once the reply is whole.
+   *
+   * The request half of {@link queryDatabase} with its reply assembled: `CMD_DATABASE` arrives as
+   * several frames whose decrypted text is a fragment of one document, so the fragments are
+   * accumulated here and scanned after each one. Answers that document's `data` rows. Rejects when
+   * `signal` aborts, and when `timeoutMs` (default {@link DB_TABLE_TIMEOUT_MS}) elapses with no
+   * complete reply.
+   *
+   * One read at a time per session: while one is accumulating, every {@link queryDatabase} on the
+   * session throws, so a second reply cannot land in this buffer.
+   */
+  async readDatabase(
+    table: string,
+    opts: { accountId?: string; timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<unknown[]> {
+    if (opts.signal?.aborted) throw new Error("readDatabase: aborted");
+    this.queryDatabase(table, { accountId: opts.accountId, query: this.fullTableQuery() });
+    this.dbReadInFlight = true;
+    try {
+      return await new Promise<unknown[]>((resolve, reject) => {
+        let text = "";
+        const onChunk = (chunk: { text: string }): void => {
+          text += chunk.text;
+          const rows = firstTableRows(text);
+          if (rows) settle(() => resolve(rows));
+        };
+        const timer = setTimeout(
+          () => settle(() => reject(new Error(`readDatabase: ${this.cfg.stationSn} sent no complete ${table}`))),
+          opts.timeoutMs ?? DB_TABLE_TIMEOUT_MS,
+        );
+        const onAbort = (): void => settle(() => reject(new Error("readDatabase: aborted")));
+        const settle = (finish: () => void): void => {
+          clearTimeout(timer);
+          this.off("dbChunk", onChunk);
+          opts.signal?.removeEventListener("abort", onAbort);
+          finish();
+        };
+
+        this.on("dbChunk", onChunk);
+        opts.signal?.addEventListener("abort", onAbort, { once: true });
+      });
+    } finally {
+      this.dbReadInFlight = false;
+    }
+  }
+
+  /** Whether a {@link readDatabase} is accumulating; see {@link queryDatabase} for what it bars. */
+  private dbReadInFlight = false;
 
   /**
    * Request the **face feature rows** over P2P (`face_feature_info`, inner `cmd 10000`). Each row
@@ -1733,7 +1927,7 @@ export class P2PSession extends EventEmitter {
    * if the missing one arrives. A logical frame's payload spans datagrams that carry no header of their
    * own, so reassembling around a hole is impossible; waiting for it is what keeps the frame whole.
    *
-   * Only once {@link REORDER_WAIT_MS} passes, or {@link REORDER_MAX_DATAGRAMS} pile up, is the datagram
+   * Only once the data type's reorder wait passes, or {@link REORDER_MAX_DATAGRAMS} pile up, is the datagram
    * treated as lost: a pending frame is discarded and delivery resumes from the earliest held datagram.
    */
   private onData(msg: Buffer, addr: Address): void {
@@ -1784,10 +1978,13 @@ export class P2PSession extends EventEmitter {
   private armReorderTimer(dataType: number): void {
     const reorder = this.reorderByType.get(dataType);
     if (!reorder?.held.size || reorder.timer) return;
-    const timer = setTimeout(() => {
-      reorder.timer = undefined;
-      this.abandonHole(dataType);
-    }, REORDER_WAIT_MS);
+    const timer = setTimeout(
+      () => {
+        reorder.timer = undefined;
+        this.abandonHole(dataType);
+      },
+      dataType === P2PDataType.VIDEO ? VIDEO_REORDER_WAIT_MS : REORDER_WAIT_MS,
+    );
     timer.unref?.();
     reorder.timer = timer;
   }
@@ -1831,7 +2028,13 @@ export class P2PSession extends EventEmitter {
     reorder.timer = undefined;
   }
 
-  /** Reassemble one in-sequence datagram body into logical frames. */
+  /**
+   * Reassemble one in-sequence datagram body into logical frames.
+   *
+   * Frames are packed back to back, so a frame header can itself be cut by a datagram boundary. The start
+   * of a header left at the end of a datagram is carried into the next one rather than discarded; dropping
+   * it would lose that frame and every frame after it until a datagram happened to begin on a header.
+   */
   private reassemble(dataType: number, datagramBody: Buffer): void {
     const pending = this.pendingByDataType.get(dataType);
     let body = pending ? Buffer.concat([pending.buf, datagramBody]) : datagramBody;
@@ -1858,6 +2061,13 @@ export class P2PSession extends EventEmitter {
       }
       this.handleFrame(header, payload.subarray(0, header.bytesToRead), dataType);
       body = body.subarray(P2P_DATA_HEADER_BYTES + header.bytesToRead);
+    }
+    if (
+      body.length > 0 &&
+      body.length < P2P_DATA_HEADER_BYTES &&
+      MAGIC_WORD.startsWith(body.subarray(0, 4).toString())
+    ) {
+      this.pendingByDataType.set(dataType, { buf: body });
     }
   }
 
@@ -1987,13 +2197,17 @@ export class P2PSession extends EventEmitter {
     // does, and a direct-binary switch is the write with the least other confirmation to fall back
     // on. An allowlist of wrappers would keep those silent.
     //
-    // The body must be exactly four bytes, not merely long enough: on the wire a control reply is a
+    // A bare result is exactly four bytes, not merely long enough: on the wire a control reply is a
     // 36-byte sign-8 frame carrying four bytes of plaintext, measured across two captures. A frame
     // the decrypt above could not open stays ciphertext — the level-1 path needs 16-byte alignment
     // and the level-2 path can decline — and ciphertext is neither JSON nor four bytes, so a length
     // test alone would read its first word and report a fabricated code for a command whose answer
     // was never recovered. Media is excluded because its bodies are never control plaintext.
-    if (!isMedia && !frame.json && data.length === 4) {
+    const paddedResult =
+      header.commandId === CMD_SET_PAYLOAD &&
+      data.length === PADDED_RESULT_BYTES &&
+      data.subarray(4).every((b) => b === 0);
+    if (!isMedia && !frame.json && (data.length === 4 || paddedResult)) {
       this.emit("commandResult", { code: data.readInt32LE(0), channel: header.channel });
     }
     this.emit("data", frame);
