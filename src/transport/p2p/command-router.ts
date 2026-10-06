@@ -671,14 +671,12 @@ export class P2PCommandRouter {
   /**
    * Restart the station that owns `sn`'s P2P session. `RESTART_HUB` (1034) is a station-scalar on the
    * broadcast channel 255 whose body is `[u32 value][account_id padded]`, value `0`. ✅ Wire-confirmed
-   * byte-exact as a level-2 frame from a capture of the app's own HomeBase Restart (2026-08-03), which
-   * rebooted the hub.
+   * byte-exact as a level-2 frame from a capture of the app's own HomeBase Restart (2026-08-03).
    *
    * The seal follows the session, as {@link sendBySessionLevel} defines it: a keyed session takes the
-   * captured level-2 frame, a keyless one — a standalone camera, which never negotiates a key — the same
-   * body sealed level-1 ({@link P2PSession.sendIntCommand}). ✅ The level-1 frame restarted a standalone
-   * indoor camera on hardware (2026-10-05). Both are replayed {@link DIRECT_CMD_SENDS}× at
-   * 200ms, as every other unacknowledged control here is.
+   * level-2 frame, a keyless one — a standalone camera, which never negotiates a key — the same body
+   * sealed level-1. Both are replayed {@link DIRECT_CMD_SENDS}× at 200ms, as every other unacknowledged
+   * control here is.
    */
   async rebootStation(sn: string): Promise<void> {
     await this.sendBySessionLevel(sn, {
@@ -691,11 +689,13 @@ export class P2PCommandRouter {
           resolved,
         ),
       l1: async ({ session, accountId }) => {
-        if (!accountId) throw new Error(`reboot for ${sn} requires an account id`);
+        const body = buildDirectBinaryBody(0, accountId);
+        let sent = false;
         for (let i = 0; i < DIRECT_CMD_SENDS; i++) {
-          session.sendIntCommand(P2P_ENVELOPE.RESTART_HUB, 0, accountId, 255);
+          if (session.sendRawLevel1Bytes(body, 255, P2P_ENVELOPE.RESTART_HUB)) sent = true;
           await sleep(200);
         }
+        if (!sent) throw new Error(`reboot for ${sn} was never sent (session not connected)`);
       },
     });
   }

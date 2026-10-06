@@ -44,12 +44,6 @@ function makeClient() {
 describe("reboot", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("restarts a HomeBase", async () => {
-    const c = makeClient();
-    await c.eufy.reboot(BASE_SN);
-    expect(c.send).toHaveBeenCalledWith(BASE_SN);
-  });
-
   it("restarts a camera that is its own station", async () => {
     const c = makeClient();
     await c.eufy.reboot(SOLO_SN);

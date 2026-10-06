@@ -41,7 +41,6 @@ import {
   buildLookupWithKeyPayload2,
   buildRawCommandPayload,
   buildStringCommandPayload,
-  buildIntCommandPayload,
   buildIntStringCommandPayload,
   buildStringPairCommandPayload,
   buildVoidCommandPayload,
@@ -1247,20 +1246,6 @@ export class P2PSession extends EventEmitter {
   }
 
   /**
-   * Send an **int control command** over the level-1 (AES-128-ECB) channel: `value` and `strValue` (admin
-   * `account_id`) on `channel`. See {@link buildIntCommandPayload}. Fire-and-forget.
-   */
-  sendIntCommand(commandType: number, value: number, strValue: string, channel = STATION_CHANNEL): void {
-    if (!this.connectAddress) throw new Error(`P2P session ${this.cfg.stationSn} is not connected`);
-    const data = Buffer.concat([
-      buildCommandHeader(this.seqNumber, commandType),
-      buildIntCommandPayload(value, strValue, channel, this.level1Key, 1),
-    ]);
-    this.seqNumber = (this.seqNumber + 1) & 0xffff;
-    this.send(this.connectAddress, RequestMessageType.DATA, data);
-  }
-
-  /**
    * Send an **int+string control command** over the level-1 (AES-128-ECB) channel — the wire shape
    * the app uses for the floodlight/spotlight switch (`CMD_SET_FLOODLIGHT_MANUAL_SWITCH` 1400) on
    * IndoorOutdoor / SoloCam-spotlight / Cam2C-3 families: `value` (0/1), `valueSub` (channel), and
@@ -1345,6 +1330,20 @@ export class P2PSession extends EventEmitter {
     const data = Buffer.concat([
       buildCommandHeader(this.seqNumber, outerCmd),
       buildRawCommandPayload(body, channel, signCode, [0x08, 0x00], 0),
+    ]);
+    this.seqNumber = (this.seqNumber + 1) & 0xffff;
+    this.send(this.connectAddress, RequestMessageType.DATA, data);
+    return true;
+  }
+  /**
+   * The level-1 twin of {@link sendRawLevel2Bytes}: the plaintext `payload` sealed AES-128-ECB under the
+   * level-1 key, signCode 1 — the seal of the level-1 media start. Returns `false` when not connected.
+   */
+  sendRawLevel1Bytes(payload: Buffer, channel: number, outerCmd: number): boolean {
+    if (!this.connectAddress) return false;
+    const data = Buffer.concat([
+      buildCommandHeader(this.seqNumber, outerCmd),
+      buildRawCommandPayload(encryptP2PData(paddingP2PData(payload), this.level1Key), channel, 1),
     ]);
     this.seqNumber = (this.seqNumber + 1) & 0xffff;
     this.send(this.connectAddress, RequestMessageType.DATA, data);
