@@ -688,15 +688,14 @@ export class P2PCommandRouter {
             session.sendRawLevel2Bytes(buildDirectBinaryBody(0, accountId), 255, P2P_ENVELOPE.RESTART_HUB, 8),
           resolved,
         ),
-      l1: async ({ session, accountId }) => {
-        const body = buildDirectBinaryBody(0, accountId);
-        let sent = false;
-        for (let i = 0; i < DIRECT_CMD_SENDS; i++) {
-          if (session.sendRawLevel1Bytes(body, 255, P2P_ENVELOPE.RESTART_HUB)) sent = true;
-          await sleep(200);
-        }
-        if (!sent) throw new Error(`reboot for ${sn} was never sent (session not connected)`);
-      },
+      l1: (resolved) =>
+        this.replayLevel2Send(
+          sn,
+          `reboot ${sn}`,
+          ({ session, accountId }) =>
+            session.sendRawLevel1Bytes(buildDirectBinaryBody(0, accountId), 255, P2P_ENVELOPE.RESTART_HUB),
+          resolved,
+        ),
     });
   }
 
