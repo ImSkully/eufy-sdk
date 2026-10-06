@@ -351,7 +351,8 @@ export type CameraActions = Surface<typeof CAMERA_MEMBERS> & {
  * - **on/off** = `CAMERA_SWITCH` (1035), except the HomeBase 3 indoor firmware route below. This
  *   module owns the *semantic* part — the value
  *   polarity, which is family-dependent (enable-bit ON ⇒ 1 for indoor cams + the 8422/8424
- *   floodlight-cams, disable-bit ON ⇒ 0 for battery/solo). The WIRE (level-1 int-string vs level-2
+ *   floodlight-cams, disable-bit ON ⇒ 0 for battery/solo and for an indoor camera (type 30) that
+ *   reports 1035 itself — see `isEnableBitPolarity`). The WIRE (level-1 int-string vs level-2
  *   direct-binary) is NOT decided here: it emits a `"auto"` scalar intent and the transport resolver
  *   picks the level by session (standalone ⇒ L1, HomeBase ⇒ L2).
  * - **privacy** = a multi-frame burst (`PRIVACY_MODE` 6250) — see the `p2p-privacy-burst` command;
@@ -369,10 +370,17 @@ export type CameraActions = Surface<typeof CAMERA_MEMBERS> & {
  *
  * ✅ Polarity confirmed against the current app's own frames: it wrote `1` to turn a camera on and `0` to
  * turn it off, on cameras of two device types whose enable-bit convention this returns.
+ *
+ * An indoor camera (type 30) that reports its state under 1035 itself is the exception: there 1035 carries
+ * the disable bit the read already decodes, so the write takes that polarity and both sides agree.
+ * ✅ Verified live on a HomeBase-attached T8400 reporting 1035="0" while on and the eufy app enabled.
+ * Only that type was measured — other indoor types reporting 1035 keep the enable bit until one is captured
+ * (#304 reports a T8030-attached T8410, type 31, whose 1035 reads as an enable bit).
  */
 function isEnableBitPolarity(ctx: CommandContext): boolean {
   const t = ctx.deviceType;
   if (t === undefined) return false;
+  if (t === DeviceType.INDOOR_CAMERA && ctx.paramIds.has(CAMERA_CMD.CAMERA_ENABLE)) return false;
   if (isIndoorCamera(ctx) && !isIndoorCamMini(ctx) && !isIndoorPanTiltS350(ctx)) return true;
   return ENABLE_BIT_FLOODLIGHT_TYPES.has(t);
 }
