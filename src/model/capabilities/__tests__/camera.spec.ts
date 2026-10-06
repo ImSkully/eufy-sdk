@@ -406,6 +406,18 @@ describe("camera capability module", () => {
       });
     });
 
+    // Only the T8400 was measured; #304 reports a T8030-attached T8410 whose 1035 reads as an enable bit.
+    it("other indoor types reporting 1035 (T8410, type 31) keep the enable bit → ON ⇒ 1, OFF ⇒ 0", () => {
+      const reports1035 = ctx(1, { deviceType: 31, model: "T8410", paramIds: new Set([CAMERA_CMD.CAMERA_ENABLE]) });
+      expect(buildCommand("on", true, reports1035)).toMatchObject({ value: 1 });
+      expect(buildCommand("off", false, reports1035)).toMatchObject({ value: 0 });
+    });
+
+    it("indoor cam (T8400, type 30) not reporting 1035 keeps the enable bit → ON ⇒ 1, OFF ⇒ 0", () => {
+      expect(buildCommand("on", true, ctx(0, { deviceType: 30, model: "T8400" }))).toMatchObject({ value: 1 });
+      expect(buildCommand("off", false, ctx(0, { deviceType: 30, model: "T8400" }))).toMatchObject({ value: 0 });
+    });
+
     it("floodlight cams 8422/8424 flip to enable bit → ON ⇒ 1", () => {
       expect(buildCommand("on", true, ctx(0, { deviceType: 37, model: "T8422" }))).toMatchObject({ value: 1 });
       expect(buildCommand("on", true, ctx(0, { deviceType: 39, model: "T8424" }))).toMatchObject({ value: 1 });
