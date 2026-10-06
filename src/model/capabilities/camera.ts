@@ -369,7 +369,7 @@ export type CameraActions = Surface<typeof CAMERA_MEMBERS> & {
  * turn it off, on cameras of two device types whose enable-bit convention this returns.
  *
  * An indoor camera (type 30) that reports its state under 1035 itself is the exception: there 1035 carries
- * the disable bit the read already decodes, so the write takes that polarity and both sides agree. 
+ * the disable bit the read already decodes, so the write takes that polarity and both sides agree.
  * ✅ Verified live on a HomeBase-attached T8400 reporting 1035="0" while on and the eufy app enabled.
  * Only that type was measured — other indoor types reporting 1035 keep the enable bit until one is captured
  * (#304 reports a T8030-attached T8410, type 31, whose 1035 reads as an enable bit).
