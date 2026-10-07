@@ -181,12 +181,13 @@ describe("P2P data reassembly", () => {
   it("reports an expired whole-video-frame gap even without a partial frame", () => {
     vi.useFakeTimers();
     try {
-      const { feed, videoGaps, received } = harness();
+      const { feed, videoGaps, received, gapTraces } = harness();
       feed(dataPacket(40, commandFrame(40, 1300, Buffer.from([1]))));
       feed(dataPacket(42, commandFrame(42, 1300, Buffer.from([3]))));
       expect(videoGaps).toHaveLength(0);
       vi.advanceTimersToNextTimer();
       expect(videoGaps).toHaveLength(1);
+      expect(gapTraces()).toHaveLength(1);
       expect(received.map((frame) => frame.raw[0])).toEqual([1, 3]);
     } finally {
       vi.useRealTimers();
@@ -282,6 +283,19 @@ describe("P2P data reassembly", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("traces a video sequence restart with no partial frame", () => {
+    const { feed, received, videoGaps, debug } = harness();
+    feed(dataPacket(20_000, commandFrame(20_000, 1300, Buffer.from([1]))));
+    feed(dataPacket(0, commandFrame(0, 1300, Buffer.from([2]))));
+
+    expect(received.map((frame) => frame.raw[0])).toEqual([1, 2]);
+    expect(videoGaps).toHaveLength(1);
+    expect(debug).toHaveBeenCalledWith(
+      LIVE_TRACE_MESSAGE,
+      expect.objectContaining({ phase: "sequence-restart", dataType: VIDEO_DATA_TYPE }),
+    );
   });
 
   it.each([1, 4, 15])(

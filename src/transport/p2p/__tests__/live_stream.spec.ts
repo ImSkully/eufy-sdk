@@ -31,6 +31,7 @@ describe("LiveStream", () => {
     session.push(p2pVideoFrame({ keyframe: false, nal: Buffer.from([0x41, 10]) }));
     expect(video).toHaveBeenCalledTimes(3);
     live.stop();
+    expect(session.listenerCount("videoGap")).toBe(0);
   });
 
   it("resynchronizes each camera separately when two streams share one session", () => {
@@ -72,17 +73,6 @@ describe("LiveStream", () => {
     second.stop();
   });
 
-  it("reports video sequence loss once at warning level", () => {
-    const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const { session, live } = mk({ keepAliveMs: 0, logger });
-    live.start();
-    session.emit("videoGap");
-    session.emit("videoGap");
-    expect(logger.warn).toHaveBeenCalledOnce();
-    expect(logger.debug).toHaveBeenCalledOnce();
-    live.stop();
-    expect(session.listenerCount("videoGap")).toBe(0);
-  });
   it("emits Annex-B video with the 22-byte header stripped + keyframe flag + resolution", () => {
     const { session, live } = mk();
     const frames: any[] = [];

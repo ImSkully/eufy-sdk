@@ -1926,7 +1926,10 @@ export class P2PSession extends EventEmitter {
     if (advance === 0) return;
     if (advance > SEQUENCE_LOOKBACK) {
       if (0x10000 - advance <= STALE_RETRANSMIT_DEPTH) return;
-      if (this.pendingByDataType.has(dataType) && this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS)
+      if (
+        (dataType === P2PDataType.VIDEO || this.pendingByDataType.has(dataType)) &&
+        this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS
+      )
         this.trace({ phase: "sequence-restart", dataType });
       this.clearReorderTimer(dataType);
       this.reorderByType.delete(dataType);
@@ -1995,7 +1998,10 @@ export class P2PSession extends EventEmitter {
    */
   private abandonHole(dataType: number): void {
     const held = this.reorderByType.get(dataType)!.held;
-    if (this.pendingByDataType.has(dataType) && this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS)
+    if (
+      (dataType === P2PDataType.VIDEO || this.pendingByDataType.has(dataType)) &&
+      this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS
+    )
       this.trace({ phase: "datagram-gap", dataType });
     this.pendingByDataType.delete(dataType);
     if (dataType === P2PDataType.VIDEO) this.emit("videoGap");

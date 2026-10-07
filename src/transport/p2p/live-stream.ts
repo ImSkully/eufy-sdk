@@ -133,17 +133,9 @@ export class LiveStream extends EventEmitter {
   private readonly units = new AccessUnitAssembler((drop) => this.reportDroppedUnit(drop));
   /** Whether a missing video datagram or incomplete unit invalidated the current reference chain. */
   private awaitingKeyframeAfterGap = false;
-  /** Warns once per stream about video sequence loss, with later gaps logged at debug level. */
-  private tracedVideoGap = false;
   private readonly videoGapHandler = () => {
     this.units.discard();
     this.awaitingKeyframeAfterGap = true;
-    const message = `[live ch${this.channel}] video sequence gap; waiting for a keyframe`;
-    if (this.tracedVideoGap) this.logger.debug(message);
-    else {
-      this.tracedVideoGap = true;
-      this.logger.warn(message);
-    }
   };
   /** The channel inbound media must be tagged with, once {@link acceptsMedia} trusts the station's tag. */
   private mediaChannel?: number;
