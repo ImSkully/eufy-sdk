@@ -293,7 +293,7 @@ export interface StateConvergenceFailure {
   property: string;
   param: number;
   /** The RAW param value the write asked the device to report. */
-  expected?: boolean | number | string;
+  expected: boolean | number | string;
   /** What the param actually read when the deadline passed, absent where the device reported none at all. */
   observed?: boolean | number | string;
   timeoutMs: number;
@@ -312,7 +312,7 @@ export class StateConvergenceError extends Error {
   readonly sn: string;
   readonly property: string;
   readonly param: number;
-  readonly expected?: boolean | number | string;
+  readonly expected: boolean | number | string;
   readonly observed?: boolean | number | string;
   readonly timeoutMs: number;
 
