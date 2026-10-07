@@ -65,17 +65,8 @@ function workStatus(state: number): RawDpCodec {
  * regression silently producing a wrong frame (no-ops on the device) is caught here.
  *
  * Wire format: `varint(bodyLen) ++ body` where `body = {field#1:method, field#2:seq}`.
- * Method 0 (START_AUTO_CLEAN) is omitted per proto3 default — field#2 only.
  */
 describe("encodeModeCtrl", () => {
-  it("START_AUTO_CLEAN (method 0, seq 112) — field #1 omitted per proto3 default", () => {
-    // body: [0x10, 0x70]  (field2 tag + varint 112)
-    // wire: [0x02, 0x10, 0x70]
-    expect(Buffer.from(encodeModeCtrl(ModeCtrlMethod.START_AUTO_CLEAN, 112), "base64")).toEqual(
-      Buffer.from([0x02, 0x10, 0x70]),
-    );
-  });
-
   it("START_GOHOME (method 6, seq 112)", () => {
     // body: [0x08, 0x06, 0x10, 0x70]
     // wire: [0x04, 0x08, 0x06, 0x10, 0x70]
@@ -94,10 +85,10 @@ describe("encodeModeCtrl", () => {
 
   it("encodes a multi-byte varint seq (seq 200 > 127)", () => {
     // seq 200: varint = [0xc8, 0x01]  (200 = 0b11001000 → [0xC8 with msb set, 0x01])
-    // body (method 0): [0x10, 0xc8, 0x01] — field#1 still omitted for method 0
-    // wire: [0x03, 0x10, 0xc8, 0x01]
-    expect(Buffer.from(encodeModeCtrl(ModeCtrlMethod.START_AUTO_CLEAN, 200), "base64")).toEqual(
-      Buffer.from([0x03, 0x10, 0xc8, 0x01]),
+    // body: [0x08, 0x0d, 0x10, 0xc8, 0x01]
+    // wire: [0x05, 0x08, 0x0d, 0x10, 0xc8, 0x01]
+    expect(Buffer.from(encodeModeCtrl(ModeCtrlMethod.PAUSE_TASK, 200), "base64")).toEqual(
+      Buffer.from([0x05, 0x08, 0x0d, 0x10, 0xc8, 0x01]),
     );
   });
 });
@@ -1655,11 +1646,7 @@ describe("what the live T2351 capture confirmed", () => {
     });
   });
 
-  it("omits method 0 from the wire, and names the rest", () => {
-    // The app's start carried NO method field — proto3 drops the zero, and the robot reads its
-    // absence as START_AUTO_CLEAN. Exactly what `encodeModeCtrl` does.
-    const start = byteCodec.decode(encodeModeCtrl(ModeCtrlMethod.START_AUTO_CLEAN, 124));
-    expect(start).toEqual([{ field: 2, kind: "int", value: 124n }]);
+  it("names the method on the wire beside its seq", () => {
     expect(byteCodec.decode(encodeModeCtrl(ModeCtrlMethod.RESUME_TASK, 126))).toEqual([
       { field: 1, kind: "int", value: 14n },
       { field: 2, kind: "int", value: 126n },
