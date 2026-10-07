@@ -438,9 +438,9 @@ export function encodeSceneClean(sceneId: number): string {
  * {@link VACUUM_CLEAN_MEMBERS.startCleaning} dispatches this.
  *
  * Method 0 with `auto_clean { clean_times: 1 }` in `Param` field 3. The bare method-0 frame
- * {@link encodeModeCtrl} builds matches a T2351 capture of the vendor app's start, but a robot left
- * idle by that frame started a whole-floor clean on this one: with the payload absent, `clean_times`
- * reads as the 0 the vendor's definition calls invalid.
+ * {@link encodeModeCtrl} builds matches a T2351 capture of the vendor app's start, but an X10 Pro
+ * Omni left idle by that frame started a whole-floor clean on this one: with the payload absent,
+ * `clean_times` reads as the 0 the vendor's definition calls invalid.
  * @internal
  */
 export function encodeAutoClean(): string {
