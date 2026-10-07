@@ -1337,6 +1337,20 @@ export class P2PSession extends EventEmitter {
     this.send(this.connectAddress, RequestMessageType.DATA, data);
     return true;
   }
+  /**
+   * The level-1 twin of {@link sendRawLevel2Bytes}: the plaintext `payload` sealed AES-128-ECB under the
+   * level-1 key, signCode 1 — the seal of the level-1 media start. Returns `false` when not connected.
+   */
+  sendRawLevel1Bytes(payload: Buffer, channel: number, outerCmd: number): boolean {
+    if (!this.connectAddress) return false;
+    const data = Buffer.concat([
+      buildCommandHeader(this.seqNumber, outerCmd),
+      buildRawCommandPayload(encryptP2PData(paddingP2PData(payload), this.level1Key), channel, 1),
+    ]);
+    this.seqNumber = (this.seqNumber + 1) & 0xffff;
+    this.send(this.connectAddress, RequestMessageType.DATA, data);
+    return true;
+  }
 
   /**
    * Stop the realtime media stream (`CMD_STOP_REALTIME_MEDIA`, 1004) on a camera `channel`, in the shape
@@ -1943,11 +1957,15 @@ export class P2PSession extends EventEmitter {
     if (advance === 0) return;
     if (advance > SEQUENCE_LOOKBACK) {
       if (0x10000 - advance <= STALE_RETRANSMIT_DEPTH) return;
-      if (this.pendingByDataType.has(dataType) && this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS)
+      if (
+        (dataType === P2PDataType.VIDEO || this.pendingByDataType.has(dataType)) &&
+        this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS
+      )
         this.trace({ phase: "sequence-restart", dataType });
       this.clearReorderTimer(dataType);
       this.reorderByType.delete(dataType);
       this.pendingByDataType.delete(dataType);
+      if (dataType === P2PDataType.VIDEO) this.emit("videoGap");
       this.lastSeqByType.set(dataType, seqNo);
       this.reassemble(dataType, msg.subarray(8));
       return;
@@ -2014,9 +2032,13 @@ export class P2PSession extends EventEmitter {
    */
   private abandonHole(dataType: number): void {
     const held = this.reorderByType.get(dataType)!.held;
-    if (this.pendingByDataType.has(dataType) && this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS)
+    if (
+      (dataType === P2PDataType.VIDEO || this.pendingByDataType.has(dataType)) &&
+      this.tracedDatagramGaps++ < MAX_TRACED_DATAGRAM_GAPS
+    )
       this.trace({ phase: "datagram-gap", dataType });
     this.pendingByDataType.delete(dataType);
+    if (dataType === P2PDataType.VIDEO) this.emit("videoGap");
     const last = this.lastSeqByType.get(dataType)!;
     const earliest = [...held.keys()].sort((a, b) => ((a - last) & 0xffff) - ((b - last) & 0xffff))[0];
     this.lastSeqByType.set(dataType, (earliest - 1) & 0xffff);

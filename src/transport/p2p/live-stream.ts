@@ -131,6 +131,12 @@ export class LiveStream extends EventEmitter {
   private lastCodec: VideoCodec = "h264";
   /** Rebuilds an access unit the station split across several frames — see {@link AccessUnitAssembler}. */
   private readonly units = new AccessUnitAssembler((drop) => this.reportDroppedUnit(drop));
+  /** Whether a missing video datagram or incomplete unit invalidated the current reference chain. */
+  private awaitingKeyframeAfterGap = false;
+  private readonly videoGapHandler = () => {
+    this.units.discard();
+    this.awaitingKeyframeAfterGap = true;
+  };
   /** The channel inbound media must be tagged with, once {@link acceptsMedia} trusts the station's tag. */
   private mediaChannel?: number;
   private tracedFirstVideoCommand = false;
@@ -173,6 +179,7 @@ export class LiveStream extends EventEmitter {
     if (this.listening) return this;
     this.listening = true;
     this.session.on("data", this.handler);
+    this.session.on("videoGap", this.videoGapHandler);
     this.session.on("liveStartUnacknowledged", this.unackedHandler);
     this.sendStart();
     const keepAliveMs = this.opts.keepAliveMs ?? DEFAULT_KEEPALIVE_MS;
@@ -271,6 +278,8 @@ export class LiveStream extends EventEmitter {
     if (!this.listening) return;
     this.listening = false;
     this.session.off("data", this.handler);
+    this.session.off("videoGap", this.videoGapHandler);
+    this.awaitingKeyframeAfterGap = false;
     this.session.off("liveStartUnacknowledged", this.unackedHandler);
     if (this.kaTimer) clearInterval(this.kaTimer);
     this.kaTimer = undefined;
@@ -306,6 +315,10 @@ export class LiveStream extends EventEmitter {
     try {
       if (f.commandId === CMD_VIDEO_FRAME) {
         for (const unit of this.units.push(f.data, (payload) => this.annexbOf(payload, f.signCode))) {
+          if (this.awaitingKeyframeAfterGap) {
+            if (!unit.keyframe) continue;
+            this.awaitingKeyframeAfterGap = false;
+          }
           if (!this.tracedFirstVideoUnit) {
             this.tracedFirstVideoUnit = true;
             this.trace({ phase: "first-video-unit", keyframe: unit.keyframe });
@@ -402,6 +415,7 @@ export class LiveStream extends EventEmitter {
    * otherwise silent in both directions: no frame reaches a consumer, and nothing states why.
    */
   private reportDroppedUnit(drop: { carried: number; chunks: number; count: number }): void {
+    this.awaitingKeyframeAfterGap = true;
     const message = `[live] dropped an incomplete access unit (${drop.carried} bytes in ${drop.chunks} frame(s), tail never arrived, ${drop.count} so far)`;
     if (drop.count === 1) this.logger.warn(message);
     else this.logger.debug(message);
