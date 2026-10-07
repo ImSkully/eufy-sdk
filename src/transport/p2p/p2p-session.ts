@@ -1337,6 +1337,20 @@ export class P2PSession extends EventEmitter {
     this.send(this.connectAddress, RequestMessageType.DATA, data);
     return true;
   }
+  /**
+   * The level-1 twin of {@link sendRawLevel2Bytes}: the plaintext `payload` sealed AES-128-ECB under the
+   * level-1 key, signCode 1 — the seal of the level-1 media start. Returns `false` when not connected.
+   */
+  sendRawLevel1Bytes(payload: Buffer, channel: number, outerCmd: number): boolean {
+    if (!this.connectAddress) return false;
+    const data = Buffer.concat([
+      buildCommandHeader(this.seqNumber, outerCmd),
+      buildRawCommandPayload(encryptP2PData(paddingP2PData(payload), this.level1Key), channel, 1),
+    ]);
+    this.seqNumber = (this.seqNumber + 1) & 0xffff;
+    this.send(this.connectAddress, RequestMessageType.DATA, data);
+    return true;
+  }
 
   /**
    * Stop the realtime media stream (`CMD_STOP_REALTIME_MEDIA`, 1004) on a camera `channel`, in the shape

@@ -669,17 +669,34 @@ export class P2PCommandRouter {
   }
 
   /**
-   * Restart a HomeBase. `RESTART_HUB` (1034) is a station-scalar on the broadcast channel 255: a
-   * level-2 frame whose body is `[u32 value][account_id padded]` — the same shape as the hub
-   * alarm-volume control. ✅ Wire-confirmed byte-exact from a capture of the app's own Restart
-   * (2026-08-03) and HW-tested: the captured frame carried value `0` and rebooted the hub. Replays
-   * like every other level-2 control, so a single dropped datagram doesn't lose it.
+   * Restart the station that owns `sn`'s P2P session. `RESTART_HUB` (1034) is a station-scalar on the
+   * broadcast channel 255 whose body is `[u32 value][account_id padded]`, value `0`. ✅ Wire-confirmed
+   * byte-exact as a level-2 frame from a capture of the app's own HomeBase Restart (2026-08-03).
+   *
+   * The seal follows the session, as {@link sendBySessionLevel} defines it: a keyed session takes the
+   * level-2 frame, a keyless one — a standalone camera, which never negotiates a key — the same body
+   * sealed level-1. Both are replayed {@link DIRECT_CMD_SENDS}× at 200ms, as every other unacknowledged
+   * control here is.
    */
   async rebootStation(sn: string): Promise<void> {
-    // value 0 — the exact value the captured app frame carried when it rebooted the hub.
-    await this.replayLevel2Send(sn, `reboot ${sn}`, ({ session, accountId }) =>
-      session.sendRawLevel2Bytes(buildDirectBinaryBody(0, accountId), 255, P2P_ENVELOPE.RESTART_HUB, 8),
-    );
+    await this.sendBySessionLevel(sn, {
+      l2: (resolved) =>
+        this.replayLevel2Send(
+          sn,
+          `reboot ${sn}`,
+          ({ session, accountId }) =>
+            session.sendRawLevel2Bytes(buildDirectBinaryBody(0, accountId), 255, P2P_ENVELOPE.RESTART_HUB, 8),
+          resolved,
+        ),
+      l1: (resolved) =>
+        this.replayLevel2Send(
+          sn,
+          `reboot ${sn}`,
+          ({ session, accountId }) =>
+            session.sendRawLevel1Bytes(buildDirectBinaryBody(0, accountId), 255, P2P_ENVELOPE.RESTART_HUB),
+          resolved,
+        ),
+    });
   }
 
   /**
