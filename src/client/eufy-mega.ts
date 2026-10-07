@@ -698,6 +698,11 @@ export class EufyMega extends EventEmitter {
    * only "differs from what was read before", which state already on hand can satisfy spuriously — and the
    * caller that has no expectation is the push path, where the signal itself is the news that a re-read is owed.
    *
+   * Only a write's observation can fail to converge. A push that finds nothing moved within the window
+   * answers `false` and announces nothing: the state it signals is already on hand — a station's MODE_SWITCH
+   * push trails the write that caused it, whose own observation has settled and announced it — and no write
+   * is waiting on the outcome for a {@link StateConvergenceError} to attribute.
+   *
    * The cloud half is asked for through {@link DeviceRegistry.refreshedList}, never by fetching the account
    * list outright. The fetch is account-wide — one house list plus one device list per house — so a param that
    * never converges would otherwise spend a whole burst of those every iteration of this loop, and concurrent
@@ -749,6 +754,7 @@ export class EufyMega extends EventEmitter {
         if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
         if (refresh.expected !== undefined && settled()) return true;
       }
+      if (refresh.expected === undefined) return false;
       throw new StateConvergenceError({
         sn,
         property: refresh.property,
