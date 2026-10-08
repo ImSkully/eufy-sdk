@@ -32,6 +32,15 @@ const SC4 = Buffer.from([0, 0, 0, 1]);
 const SC3 = Buffer.from([0, 0, 1]);
 
 /**
+ * AudioSpecificConfig (ISO/IEC 14496-3) of a station's `aac-eld` audio, which the station does not send: an
+ * `aac-eld` frame carries one raw access unit after its 16-byte header, with no transport framing.
+ *
+ * Fields: audio object type 39 (ER AAC-ELD), 16 kHz, mono, 480-sample frames, no LD-SBR. These are the bytes the
+ * v6 app's native AAC decoder (`AudioFDKDecode`) configures libfdk with for raw ELD access units.
+ */
+const AAC_ELD_AUDIO_SPECIFIC_CONFIG = Buffer.from("f8f03000", "hex");
+
+/**
  * Codec ids the station puts at {@link AUDIO_TYPE_OFFSET}, as the v6 app maps them
  * (`AudioReader.AAC_LC = 0`, `G711A = 2`, `AAC_ELD = 7`).
  *
@@ -347,7 +356,12 @@ export class LiveStream extends EventEmitter {
           if (!codec) {
             this.logger.debug(`[live] dropping audio frame: unknown codec id ${codecId ?? "missing"}`);
           } else {
-            this.emit("audio", { codec, data: audio });
+            this.emit(
+              "audio",
+              codec === "aac-eld"
+                ? { codec, data: audio, config: AAC_ELD_AUDIO_SPECIFIC_CONFIG }
+                : { codec, data: audio },
+            );
           }
         }
       }

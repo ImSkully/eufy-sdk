@@ -602,16 +602,27 @@ export type AudioCodec = "aac-lc" | "aac-eld" | "g711a";
 /**
  * One audio access unit, carrying the codec the station declared for it.
  *
- * Sample rate and channel count are deliberately absent: they are not on the wire. The v6 app assumes
- * 16 kHz mono for every audio type rather than reading them, so the SDK does not invent fields the
- * device never sent.
+ * Sample rate and channel count are absent for `aac-lc` and `g711a`: they are not on the wire, and the v6 app
+ * assumes 16 kHz mono for every audio type rather than reading them. An `aac-lc` frame is one ADTS frame and
+ * `g711a` is raw A-law. An `aac-eld` frame is one raw access unit with no transport framing, so it carries the
+ * AudioSpecificConfig that decodes it.
  */
-export interface LiveAudioFrame {
-  /** Codec declared in the frame header. */
-  codec: AudioCodec;
-  /** Elementary-stream bytes (ADTS-framed for the two AAC profiles). */
-  data: Buffer;
-}
+export type LiveAudioFrame =
+  | {
+      /** Codec declared in the frame header. */
+      codec: "aac-lc" | "g711a";
+      /** One ADTS frame for `aac-lc`, raw A-law samples for `g711a`. */
+      data: Buffer;
+      config?: undefined;
+    }
+  | {
+      /** Codec declared in the frame header. */
+      codec: "aac-eld";
+      /** One raw AAC-ELD access unit. */
+      data: Buffer;
+      /** AudioSpecificConfig (ISO/IEC 14496-3) that decodes `data`. */
+      config: Buffer;
+    };
 
 /**
  * One fragmented-MP4 (CMAF) output unit from the native muxer. `init` (the `ftyp`+`moov` init

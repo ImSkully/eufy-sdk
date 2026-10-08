@@ -163,6 +163,22 @@ describe("LiveStream", () => {
     expect(audio.map((f) => f.codec)).toEqual(["aac-eld"]);
   });
 
+  it("attaches the ELD decoder config to aac-eld frames and leaves every payload untouched", () => {
+    const { session, live } = mk();
+    const audio: any[] = [];
+    live.on("audio", (f) => audio.push(f));
+    live.start();
+    const payload = Buffer.from([0x73, 0x69, 0xa0, 0x4a]);
+    session.push(p2pAudioFrame(7, payload) as any);
+    session.push(p2pAudioFrame(0, payload) as any);
+    session.push(p2pAudioFrame(2, payload) as any);
+    expect(audio.map((f) => f.codec)).toEqual(["aac-eld", "aac-lc", "g711a"]);
+    expect(audio[0].config).toEqual(Buffer.from("f8f03000", "hex"));
+    expect(audio.every((f) => f.data.equals(payload))).toBe(true);
+    expect(audio[1].config).toBeUndefined();
+    expect(audio[2].config).toBeUndefined();
+  });
+
   it("starts the requested camera channel", () => {
     const { session, live } = mk({ channel: 3 }); // e.g. T8425
     live.start();
