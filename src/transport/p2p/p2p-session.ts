@@ -1586,7 +1586,7 @@ export class P2PSession extends EventEmitter {
           camera_type: 0,
           entrytype: 0,
           key: this.rsaModulus(),
-          streamtype: 1,
+          streamtype: 2,
           ...payload,
         }
       : payload;
